@@ -1,0 +1,7 @@
+# Machine-specific nvim-mcp registration helper (contains absolute paths)
+nvim-mcp.mcp.json
+
+# Python / uv
+__pycache__/
+*.pyc
+.venv/
