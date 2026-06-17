@@ -26,6 +26,8 @@ M.defaults = {
     icons = { "󰲡 ", "󰲣 ", "󰲥 ", "󰲧 ", "󰲩 ", "󰲫 " },
     -- ASCII fallback.
     ascii = { "# ", "## ", "### ", "#### ", "##### ", "###### " },
+    -- Draw a GitHub-style full-width underline below headings up to this level.
+    underline = 2,
   },
 
   bullet = {
@@ -60,6 +62,28 @@ M.defaults = {
   },
 
   table = { enabled = true },
+
+  -- Obsidian-style callouts / GitHub alerts: > [!NOTE], [!TIP], [!WARNING], …
+  callout = {
+    enabled = true,
+    -- type -> { icon, hl, title }. Unlisted types fall back to "note".
+    types = {
+      note = { icon = "󰋽 ", hl = "MdRenderCalloutNote", title = "Note" },
+      tip = { icon = "󰌶 ", hl = "MdRenderCalloutTip", title = "Tip" },
+      important = { icon = "󰅾 ", hl = "MdRenderCalloutImportant", title = "Important" },
+      warning = { icon = "󰀪 ", hl = "MdRenderCalloutWarning", title = "Warning" },
+      caution = { icon = "󰳦 ", hl = "MdRenderCalloutCaution", title = "Caution" },
+      -- common aliases
+      info = { icon = "󰋽 ", hl = "MdRenderCalloutNote", title = "Info" },
+      hint = { icon = "󰌶 ", hl = "MdRenderCalloutTip", title = "Hint" },
+      success = { icon = "󰄬 ", hl = "MdRenderCalloutTip", title = "Success" },
+      question = { icon = "󰘥 ", hl = "MdRenderCalloutWarning", title = "Question" },
+      todo = { icon = "󰗡 ", hl = "MdRenderCalloutNote", title = "Todo" },
+      danger = { icon = "󱐌 ", hl = "MdRenderCalloutCaution", title = "Danger" },
+      bug = { icon = "󰨰 ", hl = "MdRenderCalloutCaution", title = "Bug" },
+      example = { icon = "󰉹 ", hl = "MdRenderCalloutImportant", title = "Example" },
+    },
+  },
 
   -- Inline image rendering via the kitty graphics protocol. Experimental and
   -- off by default; requires a GPU terminal and (for non-PNG) ImageMagick.

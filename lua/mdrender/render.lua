@@ -5,6 +5,7 @@
 --- headings, emphasis, code, lists, tasks, quotes, rules, links and tables.
 --- No treesitter dependency — line-oriented scanning keeps it self-contained.
 local config = require("mdrender.config")
+local mdtable = require("mdrender.mdtable")
 
 local M = {}
 
@@ -82,6 +83,31 @@ local function scan_fences(lines)
     end
   end
   return regions, code_set
+end
+
+--- Scan for callout/alert regions: `> [!TYPE]` followed by contiguous `>` lines.
+---@return table map  row -> { type = key, header = bool }
+local function scan_callouts(lines)
+  local map = {}
+  local i = 1
+  while i <= #lines do
+    local t = lines[i]:match("^%s*>%s*%[!(%w+)%]")
+    if t then
+      local key = t:lower()
+      if not config.opts.callout.types[key] then
+        key = "note"
+      end
+      local r = i
+      while r <= #lines and lines[r]:match("^%s*>") do
+        map[r - 1] = { type = key, header = (r == i) }
+        r = r + 1
+      end
+      i = r
+    else
+      i = i + 1
+    end
+  end
+  return map
 end
 
 --- Inline span decorations within a single (non-code) line. Skipped entirely on
@@ -192,6 +218,11 @@ local function decorate_line(set, row, line, ctx)
   local o = config.opts
   local nf = config.gpu
 
+  -- tables are rendered as whole regions elsewhere
+  if ctx.table_rows[row] then
+    return
+  end
+
   -- fenced code block --------------------------------------------------------
   if ctx.code_set[row] then
     if o.code.enabled and o.code.style == "full" then
@@ -228,6 +259,12 @@ local function decorate_line(set, row, line, ctx)
           virt_text = { { icons[level], "MdRenderH" .. level } },
           virt_text_pos = "inline",
         })
+        -- GitHub-style underline rule below H1/H2.
+        if level <= (o.heading.underline or 0) then
+          set(row, 0, {
+            virt_lines = { { { string.rep("─", ctx.width), "MdRenderRule" } } },
+          })
+        end
       end
       decorate_inline(set, row, line, ctx.reveal)
       return
@@ -250,10 +287,12 @@ local function decorate_line(set, row, line, ctx)
     end
   end
 
-  -- blockquote ---------------------------------------------------------------
+  -- blockquote / callout -----------------------------------------------------
   if o.quote.enabled then
     local prefix = line:match("^(%s*>[>%s]*)")
     if prefix then
+      local callout = ctx.callout[row]
+      local bar_hl = callout and o.callout.types[callout.type].hl or "MdRenderQuote"
       if not ctx.reveal then
         -- conceal every '>' marker, render a colored bar in its place
         for idx = 1, #prefix do
@@ -263,10 +302,19 @@ local function decorate_line(set, row, line, ctx)
         end
         local bar = nf and o.quote.icon or o.quote.ascii
         local lead = #(line:match("^(%s*)") or "")
-        set(row, lead, {
-          virt_text = { { bar, "MdRenderQuote" } },
-          virt_text_pos = "inline",
-        })
+        set(row, lead, { virt_text = { { bar, bar_hl } }, virt_text_pos = "inline" })
+        -- callout header: replace [!TYPE] with an icon + colored title
+        if callout and callout.header then
+          local t = o.callout.types[callout.type]
+          local ms, me = line:find("%[!%w+%]")
+          if ms then
+            set(row, ms - 1, { end_col = me, conceal = "" })
+            set(row, ms - 1, {
+              virt_text = { { (nf and t.icon or "") .. t.title, t.hl } },
+              virt_text_pos = "inline",
+            })
+          end
+        end
       end
       decorate_inline(set, row, line, ctx.reveal)
       return
@@ -324,41 +372,6 @@ local function decorate_line(set, row, line, ctx)
     end
   end
 
-  -- table row ----------------------------------------------------------------
-  if o.table.enabled and line:find("|") then
-    local trimmed = line:gsub("%s", "")
-    local is_sep = trimmed:match("^|?[:%-|]+|?$") and trimmed:find("%-")
-    if is_sep then
-      if not ctx.reveal then
-        set(row, 0, { end_col = #line, conceal = "" })
-        local cells = {}
-        for ch in line:gmatch(".") do
-          if ch == "|" then
-            cells[#cells + 1] = "┼"
-          elseif ch == "-" or ch == ":" then
-            cells[#cells + 1] = "─"
-          elseif ch == " " then
-            cells[#cells + 1] = " "
-          end
-        end
-        set(row, 0, {
-          virt_text = { { table.concat(cells), "MdRenderTable" } },
-          virt_text_pos = "overlay",
-        })
-      end
-      return
-    else
-      -- color the pipes; still apply inline styling inside cells
-      local idx = line:find("|", 1, true)
-      while idx do
-        set(row, idx - 1, { end_col = idx, hl_group = "MdRenderTable" })
-        idx = line:find("|", idx + 1, true)
-      end
-      decorate_inline(set, row, line, ctx.reveal)
-      return
-    end
-  end
-
   -- plain paragraph line -----------------------------------------------------
   decorate_inline(set, row, line, ctx.reveal)
 end
@@ -394,6 +407,17 @@ function M.render(buf)
     fence_close[r.e] = true
   end
 
+  local callout = config.opts.callout.enabled and scan_callouts(lines) or {}
+
+  -- table regions + the set of rows they own (skipped by decorate_line)
+  local table_regions = config.opts.table.enabled and mdtable.scan(lines, code_set) or {}
+  local table_rows = {}
+  for _, tr in ipairs(table_regions) do
+    for r = tr.header, tr.last do
+      table_rows[r] = true
+    end
+  end
+
   local top, bot, width, cursor_row = 0, #lines - 1, 120, -1
   if win then
     width = vim.api.nvim_win_get_width(win)
@@ -418,9 +442,18 @@ function M.render(buf)
         code_set = code_set,
         fence_open = fence_open,
         fence_close = fence_close,
+        table_rows = table_rows,
+        callout = callout,
         reveal = row == cursor_row,
         width = width,
       })
+    end
+  end
+
+  -- render any table region that intersects the visible range
+  for _, tr in ipairs(table_regions) do
+    if tr.last >= top and tr.header <= bot then
+      mdtable.render(set, tr, lines, cursor_row)
     end
   end
 

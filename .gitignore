@@ -5,3 +5,8 @@ nvim-mcp.mcp.json
 __pycache__/
 *.pyc
 .venv/
+
+# transient dev screenshots
+test/render.png
+test/render_kitty.png
+test/render_nf.png.tmp

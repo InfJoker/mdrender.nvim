@@ -9,24 +9,32 @@ real images inline.
 No treesitter dependency: the decorator is a self-contained, line-oriented
 extmark engine.
 
-![rendered sample](test/render_kitty.png)
+![rendered sample](test/render_nf.png)
 
-*Rendered live in kitty (`test/sample.md`).*
+*`test/sample.md` rendered live (Nerd Font, true color).*
 
 ## Features
 
-- **Headings** — `#`…`######` concealed, per-level glyph + colored line.
+- **Headings** — `#`…`######` concealed, per-level glyph + colored line, with a
+  GitHub-style underline rule below H1/H2.
 - **Emphasis** — `**bold**`, `*italic*`, `***bold italic***`, `~~strikethrough~~`.
 - **Inline code** & **fenced code blocks** — backgrounded, with a language label.
 - **Lists** — bullets become `● ○ ◆ ◇` by depth; ordered numbers colored.
 - **Task lists** — `- [ ]` / `- [x]` become checkbox glyphs; done items dimmed.
+- **Tables** — redrawn as proper box-drawn, column-aligned tables
+  (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`) honoring `:--`/`--:`/`:-:` alignment.
+- **Callouts / GitHub alerts** — `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`,
+  `[!WARNING]`, `[!CAUTION]` (and aliases) get an icon, colored title and bar.
 - **Blockquotes** — a colored bar replaces `>`.
 - **Horizontal rules** — drawn as a full-width line.
 - **Links & images** — URL hidden, text styled, with a leading icon.
-- **Tables** — pipes recolored, separator rows drawn with box characters.
 - **Anti-conceal** — the line under the cursor shows raw Markdown for editing.
 - **Inline images** (experimental) — local images rendered via the kitty
   graphics protocol on supported terminals.
+
+![tables and callouts](test/render_tables.png)
+
+*Box-drawn tables with column alignment, plus callouts / GitHub alerts.*
 
 ## Requirements
 
@@ -79,14 +87,15 @@ require("mdrender").setup({
   conceal_level = 2,
   render_modes = { "n", "v", "V", "\22", "c", "t" }, -- not insert
 
-  heading  = { enabled = true, icons = { "󰲡 ", "󰲣 ", "󰲥 ", "󰲧 ", "󰲩 ", "󰲫 " } },
+  heading  = { enabled = true, icons = { "󰲡 ", "󰲣 ", "󰲥 ", "󰲧 ", "󰲩 ", "󰲫 " }, underline = 2 },
   bullet   = { enabled = true, icons = { "●", "○", "◆", "◇" } },
   checkbox = { enabled = true, unchecked = { icon = "󰄱 " }, checked = { icon = "󰱒 " } },
   quote    = { enabled = true, icon = "▋ " },
   code     = { enabled = true, style = "full", language = true, lang_icon = "󰅴 " },
   dash     = { enabled = true, icon = "─" },
   link     = { enabled = true, icon = "󰌷 ", image_icon = "󰥶 " },
-  table    = { enabled = true },
+  table    = { enabled = true },     -- box-drawn, column-aligned
+  callout  = { enabled = true },     -- > [!NOTE] / [!TIP] / [!WARNING] / …
 
   images = {            -- experimental, off by default
     enabled = false,
