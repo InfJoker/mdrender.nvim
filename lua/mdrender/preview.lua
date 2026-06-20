@@ -185,18 +185,39 @@ local function emit(seq)
   term_write(seq)
 end
 
---- base64 of a short string (file path) using Neovim's builtin.
-local function b64(s)
-  return vim.base64.encode(s)
-end
-
 local ns = vim.api.nvim_create_namespace("mdrender_preview")
 
---- Transmit a PNG as a kitty *virtual placement* using Unicode placeholders,
---- sized to cols x rows cells. The image is then displayed by writing
---- placeholder text into the preview buffer (see paint()). file transport.
+--- Transmit a PNG and create a kitty virtual placement (Unicode placeholders),
+--- sized to cols x rows cells. Uses *direct* data transport (t=d), sending the
+--- base64 PNG bytes in 4 KiB chunks — file transport (t=f) fails to open the
+--- file across tmux/sandboxing (kitty returns EBADF), direct data always works.
 local function kitty_transmit_virtual(id, png, cols, rows)
-  emit(string.format("\27_Ga=T,U=1,i=%d,q=2,f=100,t=f,c=%d,r=%d;%s\27\\", id, cols, rows, b64(png)))
+  local f = io.open(png, "rb")
+  if not f then
+    return false
+  end
+  local data = f:read("*a")
+  f:close()
+  local b64 = vim.base64.encode(data)
+  local CHUNK, n, i = 4096, #b64, 1
+  if n == 0 then
+    return false
+  end
+  local first = true
+  while i <= n do
+    local chunk = b64:sub(i, i + CHUNK - 1)
+    i = i + CHUNK
+    local more = (i <= n) and 1 or 0
+    if first then
+      emit(string.format("\27_Ga=t,f=100,t=d,i=%d,q=2,m=%d;%s\27\\", id, more, chunk))
+      first = false
+    else
+      emit(string.format("\27_Gm=%d;%s\27\\", more, chunk))
+    end
+  end
+  -- create the virtual placement that the placeholder cells reference
+  emit(string.format("\27_Ga=p,U=1,i=%d,p=1,c=%d,r=%d,q=2\27\\", id, cols, rows))
+  return true
 end
 
 --- Delete image id `id` and its placements.
@@ -323,13 +344,16 @@ local function preview_available()
     return false, "not a kitty-graphics terminal (kitty/Ghostty/WezTerm)"
   end
   if vim.env.TMUX then
-    local on = vim.trim(vim.fn.system({ "tmux", "show", "-gv", "allow-passthrough" })) == "on"
-    if not on then
+    -- Must be "all", not "on": Neovim runs in the alternate screen, where tmux
+    -- only forwards graphics passthrough when allow-passthrough is "all".
+    local pt = vim.trim(vim.fn.system({ "tmux", "show", "-gv", "allow-passthrough" }))
+    if pt ~= "all" then
       return false,
-        "tmux is intercepting the kitty graphics escapes. Enable passthrough, then retry:\n"
-          .. "    tmux set -g allow-passthrough on\n"
-          .. "  To make it permanent, add this line to ~/.tmux.conf:\n"
-          .. "    set -g allow-passthrough on"
+        "tmux is intercepting the kitty graphics escapes. Enable FULL passthrough, then retry:\n"
+          .. "    tmux set -g allow-passthrough all\n"
+          .. "  To make it permanent, add to ~/.tmux.conf:\n"
+          .. "    set -g allow-passthrough all\n"
+          .. "  ('on' is not enough — Neovim's alternate screen needs 'all'.)"
     end
     return true
   end
