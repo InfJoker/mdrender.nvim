@@ -165,7 +165,17 @@ local function tty()
   return h
 end
 
+--- Wrap a kitty graphics APC in the tmux passthrough envelope so tmux forwards
+--- it to the outer terminal: \ePtmux; <esc-doubled seq> \e\\
+local function tmux_wrap(seq)
+  return "\27Ptmux;" .. seq:gsub("\27", "\27\27") .. "\27\\"
+end
+
 local function emit(seq)
+  -- Only the graphics APC (\e_G...) needs passthrough; cursor moves go to tmux.
+  if vim.env.TMUX and seq:sub(1, 2) == "\27_" then
+    seq = tmux_wrap(seq)
+  end
   if M._capture then
     M._capture[#M._capture + 1] = seq
     return
@@ -300,12 +310,37 @@ local function schedule_refresh()
   end, 150)
 end
 
+--- Whether the graphical preview can run here. Unlike inline images, the
+--- preview supports tmux as long as `allow-passthrough` is on (we try to enable
+--- it). Returns ok, reason.
+local function preview_available()
+  local supported, term = gpu.detect()
+  if not supported then
+    return false, "not a kitty-graphics terminal (kitty/Ghostty/WezTerm)"
+  end
+  if vim.env.TMUX then
+    local on = vim.trim(vim.fn.system({ "tmux", "show", "-gv", "allow-passthrough" })) == "on"
+    if not on then
+      return false,
+        "tmux is intercepting the kitty graphics escapes. Enable passthrough, then retry:\n"
+          .. "    tmux set -g allow-passthrough on\n"
+          .. "  To make it permanent, add this line to ~/.tmux.conf:\n"
+          .. "    set -g allow-passthrough on"
+    end
+    return true
+  end
+  if term ~= "kitty" and term ~= "ghostty" and term ~= "wezterm" then
+    return false, "no kitty graphics protocol on this terminal"
+  end
+  return true
+end
+
 --- Open the preview for the current buffer.
 function M.open()
   if state then
     return M.focus_source()
   end
-  local ok, reason = gpu.graphics_available(select(2, gpu.detect()))
+  local ok, reason = preview_available()
   if not ok then
     vim.notify("[mdrender] graphical preview unavailable: " .. reason, vim.log.levels.WARN)
     return
@@ -414,5 +449,7 @@ end
 M._build_html = build_html
 M._find_chrome = find_chrome
 M._render_png = render_png
+M._available = preview_available
+M._tmux_wrap = tmux_wrap
 
 return M
