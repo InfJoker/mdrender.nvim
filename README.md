@@ -145,10 +145,14 @@ save (or on every edit with `preview.refresh = "edit"`).
 
 Requirements:
 
-- A **kitty-graphics terminal** (kitty / Ghostty / WezTerm), **not** inside
-  tmux/screen (the multiplexer swallows the graphics escapes).
+- A **kitty-graphics terminal** (kitty / Ghostty / WezTerm).
 - **Google Chrome / Chromium** on `PATH` (auto-detected; or set
   `preview.chrome`).
+- **Inside tmux:** requires **Neovim 0.11+** (for `nvim_ui_send`, so the graphics
+  escapes survive tmux) **and** `set -g allow-passthrough all` in your tmux
+  config. On Neovim 0.10 the graphical preview only works in a **bare kitty
+  window** (no tmux) — but the in-buffer rendering (`:MdRender toggle`) works
+  everywhere, tmux included.
 
 Config (defaults):
 

@@ -344,6 +344,18 @@ local function preview_available()
     return false, "not a kitty-graphics terminal (kitty/Ghostty/WezTerm)"
   end
   if vim.env.TMUX then
+    -- Inside tmux, the graphics escapes must be emitted through Neovim's own UI
+    -- output stream (nvim_ui_send) so the tmux passthrough sequence stays intact.
+    -- That API only exists in Neovim 0.11+. On 0.10 the escapes get split by the
+    -- TUI's own writes and tmux drops them, leaving a blank preview.
+    if not vim.api.nvim_ui_send then
+      return false,
+        "Graphical preview inside tmux needs Neovim 0.11+ (for clean graphics output).\n"
+          .. "  On Neovim 0.10, tmux drops the kitty graphics escapes. Either:\n"
+          .. "    • run the preview in a bare kitty window/tab (no tmux), or\n"
+          .. "    • upgrade Neovim to 0.11+.\n"
+          .. "  (The in-buffer rendering — :MdRender toggle — works everywhere.)"
+    end
     -- Must be "all", not "on": Neovim runs in the alternate screen, where tmux
     -- only forwards graphics passthrough when allow-passthrough is "all".
     local pt = vim.trim(vim.fn.system({ "tmux", "show", "-gv", "allow-passthrough" }))
