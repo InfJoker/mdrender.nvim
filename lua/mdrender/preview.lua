@@ -152,24 +152,25 @@ local function render_png(buf, width_px, cb)
 end
 
 ----------------------------------------------------------------------
--- kitty graphics output (straight to the tty)
+-- kitty graphics output (via Neovim's own UI output stream)
 ----------------------------------------------------------------------
-
-local function tty()
-  if state and state.tty then
-    return state.tty
-  end
-  local h = io.open("/dev/tty", "w")
-  if state then
-    state.tty = h
-  end
-  return h
-end
 
 --- Wrap a kitty graphics APC in the tmux passthrough envelope so tmux forwards
 --- it to the outer terminal: \ePtmux; <esc-doubled seq> \e\\
 local function tmux_wrap(seq)
   return "\27Ptmux;" .. seq:gsub("\27", "\27\27") .. "\27\\"
+end
+
+--- Write raw bytes to the terminal. Use Neovim's UI output stream so the bytes
+--- interleave cleanly with its rendering (writing to /dev/tty races the TUI and
+--- gets clobbered — this was why the image never appeared).
+local function term_write(seq)
+  if vim.api.nvim_ui_send then
+    vim.api.nvim_ui_send(seq)
+  else
+    io.stdout:write(seq)
+    io.stdout:flush()
+  end
 end
 
 local function emit(seq)
@@ -181,11 +182,7 @@ local function emit(seq)
     M._capture[#M._capture + 1] = seq
     return
   end
-  local h = tty()
-  if h then
-    h:write(seq)
-    h:flush()
-  end
+  term_write(seq)
 end
 
 --- base64 of a short string (file path) using Neovim's builtin.
@@ -245,18 +242,27 @@ local function paint()
   local top = math.floor(frac * math.max(0, total - winrows) + 0.5)
 
   local hl = kgp.id_highlight(s.id)
-  local lines = {}
-  for i = 0, winrows - 1 do
-    local img_row = top + i
-    lines[i + 1] = (img_row < total) and kgp.row_string(img_row, cols) or ""
+  -- The preview buffer holds `winrows` empty real lines; each gets an *overlay*
+  -- virtual-text of its placeholder row. Virtual text (not buffer text) avoids
+  -- Neovim mangling the placeholder char + combining diacritics, matching how
+  -- snacks.nvim renders kitty placeholders.
+  local empty = {}
+  for i = 1, winrows do
+    empty[i] = ""
   end
   vim.bo[s.buf].modifiable = true
-  vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, empty)
   vim.bo[s.buf].modifiable = false
   vim.api.nvim_buf_clear_namespace(s.buf, ns, 0, -1)
-  for i, line in ipairs(lines) do
-    if line ~= "" then
-      pcall(vim.api.nvim_buf_set_extmark, s.buf, ns, i - 1, 0, { end_col = #line, hl_group = hl })
+  for i = 0, winrows - 1 do
+    local img_row = top + i
+    if img_row < total then
+      pcall(vim.api.nvim_buf_set_extmark, s.buf, ns, i, 0, {
+        virt_text = { { kgp.row_string(img_row, cols), hl } },
+        virt_text_pos = "overlay",
+        virt_text_win_col = 0,
+        virt_text_hide = false,
+      })
     end
   end
 end
@@ -367,7 +373,7 @@ function M.open()
   -- Fill with blank lines so no '~' end-of-buffer markers show under the image.
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(string.rep("\n", 400), "\n"))
 
-  state = { win = win, buf = buf, src_win = src_win, src_buf = src_buf, id = nil, tmpdir = nil, tty = nil }
+  state = { win = win, buf = buf, src_win = src_win, src_buf = src_buf, id = nil, tmpdir = nil }
 
   -- Return focus to the source window — you keep editing on the left.
   vim.api.nvim_set_current_win(src_win)
@@ -415,11 +421,6 @@ function M.close()
   if s.id then
     kitty_delete(1)
     kitty_delete(2)
-  end
-  if s.tty then
-    pcall(function()
-      s.tty:close()
-    end)
   end
   if s.win and vim.api.nvim_win_is_valid(s.win) then
     pcall(vim.api.nvim_win_close, s.win, true)
