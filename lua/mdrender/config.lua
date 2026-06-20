@@ -85,6 +85,17 @@ M.defaults = {
     },
   },
 
+  -- Graphical "Obsidian-style" preview: renders the buffer to an image with
+  -- headless Chrome and shows it in a split via the kitty graphics protocol.
+  preview = {
+    chrome = nil, -- path to Chrome/Chromium; nil => autodetect
+    cell_pixels = { 8, 17 }, -- { width, height } per cell, for geometry/aspect
+    scale = 2, -- device scale factor (crisper text)
+    refresh = "save", -- "save" (BufWritePost) or "edit" (debounced TextChanged)
+    follow = true, -- scroll the preview to follow the source window
+    split = "vertical", -- "vertical" | "horizontal"
+  },
+
   -- Inline image rendering via the kitty graphics protocol. Experimental and
   -- off by default; requires a GPU terminal and (for non-PNG) ImageMagick.
   images = {

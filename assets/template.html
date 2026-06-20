@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<base href="{{BASE}}">
+<style>
+{{CSS}}
+{{HLCSS}}
+pre code.hljs { background: none; padding: 0; }
+</style>
+</head>
+<body>
+<div id="page"></div>
+<script>{{MARKED}}</script>
+<script>{{HLJS}}</script>
+<script>
+(function () {
+  var SRC = {{CONTENT_JSON}};
+  var page = document.getElementById("page");
+  page.innerHTML = marked.parse(SRC, { gfm: true, breaks: false });
+
+  // Obsidian/GitHub callouts: > [!TYPE] title
+  var TYPES = {
+    note: ["ℹ️", "Note", "note"],
+    info: ["ℹ️", "Info", "note"],
+    tip: ["💡", "Tip", "tip"],
+    hint: ["💡", "Hint", "tip"],
+    success: ["✅", "Success", "tip"],
+    important: ["❗", "Important", "important"],
+    example: ["📋", "Example", "important"],
+    warning: ["⚠️", "Warning", "warning"],
+    question: ["❓", "Question", "warning"],
+    todo: ["📝", "Todo", "note"],
+    caution: ["🛑", "Caution", "caution"],
+    danger: ["🛑", "Danger", "caution"],
+    bug: ["🐛", "Bug", "caution"]
+  };
+  page.querySelectorAll("blockquote").forEach(function (bq) {
+    var first = bq.querySelector("p");
+    if (!first) return;
+    // Custom inline title only counts when it sits before a hard line break.
+    var m = first.innerHTML.match(/^\[!(\w+)\]([^\n<]*?)(?:<br\s*\/?>|\n|$)/);
+    if (!m) return;
+    var meta = TYPES[m[1].toLowerCase()] || TYPES.note;
+    var title = (m[2] || "").trim() || meta[1];
+    first.innerHTML = first.innerHTML.replace(/^\[!\w+\][^\n<]*(<br\s*\/?>|\n)?/, "");
+    if (!first.textContent.trim()) first.remove();
+    bq.className = "callout callout-" + meta[2];
+    var titleEl = document.createElement("div");
+    titleEl.className = "callout-title";
+    titleEl.innerHTML = '<span class="icon">' + meta[0] + "</span><span>" + title + "</span>";
+    var body = document.createElement("div");
+    body.className = "callout-body";
+    while (bq.firstChild) body.appendChild(bq.firstChild);
+    bq.appendChild(titleEl);
+    bq.appendChild(body);
+  });
+
+  if (window.hljs) hljs.highlightAll();
+
+  var h = document.documentElement.scrollHeight;
+  document.body.setAttribute("data-h", String(h));
+  document.title = "H" + h;
+})();
+</script>
+</body>
+</html>

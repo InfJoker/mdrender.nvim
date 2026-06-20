@@ -29,6 +29,9 @@ extmark engine.
 - **Horizontal rules** — drawn as a full-width line.
 - **Links & images** — URL hidden, text styled, with a leading icon.
 - **Anti-conceal** — the line under the cursor shows raw Markdown for editing.
+- **Graphical preview** — an optional Obsidian/GitHub-quality rendered page
+  (real fonts, syntax highlighting, bordered tables) shown as an image in a
+  split via headless Chrome + the kitty graphics protocol. See below.
 - **Inline images** (experimental) — local images rendered via the kitty
   graphics protocol on supported terminals.
 
@@ -116,6 +119,47 @@ Override e.g. `MdRenderH1`, `MdRenderCode`, `MdRenderLink`, … to taste.
 :MdRender disable
 :MdRender status    " show attach / gpu / terminal / image state
 :MdRender image     " render the image under the cursor (kitty protocol)
+```
+
+## Graphical preview (Obsidian-style)
+
+Two ways to view Markdown:
+
+1. **In-buffer decorations** (default) — the terminal-native styled view shown
+   above, where you edit and read in the same buffer.
+2. **Graphical preview** — a true browser-quality rendered page (Obsidian/GitHub
+   look: real fonts, heading sizes, syntax-highlighted code, bordered tables,
+   styled callouts) shown as an *image* in a split, refreshing as you edit.
+
+```vim
+:MdRender preview     " toggle the graphical preview split
+```
+
+How it works: the buffer is rendered to HTML with an Obsidian-like CSS theme
+(`marked` + `highlight.js` run client-side), screenshotted with **headless
+Chrome**, and the resulting image is displayed in a split via the **kitty
+graphics protocol**. The image is cropped to the preview window and scrolls to
+follow your cursor in the source window. It refreshes on save (or on every edit
+with `preview.refresh = "edit"`).
+
+Requirements:
+
+- A **kitty-graphics terminal** (kitty / Ghostty / WezTerm), **not** inside
+  tmux/screen (the multiplexer swallows the graphics escapes).
+- **Google Chrome / Chromium** on `PATH` (auto-detected; or set
+  `preview.chrome`).
+
+Config (defaults):
+
+```lua
+preview = {
+  chrome = nil,             -- path to Chrome/Chromium; nil => autodetect
+  cell_pixels = { 8, 17 },  -- terminal cell { width, height } px (geometry/aspect)
+  scale = 2,                -- device scale factor (crisper text)
+  refresh = "save",         -- "save" (BufWritePost) | "edit" (debounced)
+  follow = true,            -- scroll preview to follow the source window
+  split = "vertical",       -- "vertical" | "horizontal"
+}
 ```
 
 ## Inline images (experimental)
