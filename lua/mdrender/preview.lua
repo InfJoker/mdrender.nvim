@@ -11,6 +11,7 @@
 --- disabled inside tmux/screen unless graphics passthrough is configured.
 local config = require("mdrender.config")
 local gpu = require("mdrender.gpu")
+local kgp = require("mdrender.kgp")
 
 local M = {}
 
@@ -192,40 +193,22 @@ local function b64(s)
   return vim.base64.encode(s)
 end
 
---- Transmit a PNG file to kitty under image id `id` (a=t, file transport).
-local function kitty_transmit(id, png)
-  emit("\27_Ga=t,t=f,f=100,i=" .. id .. ",q=2;" .. b64(png) .. "\27\\")
+local ns = vim.api.nvim_create_namespace("mdrender_preview")
+
+--- Transmit a PNG as a kitty *virtual placement* using Unicode placeholders,
+--- sized to cols x rows cells. The image is then displayed by writing
+--- placeholder text into the preview buffer (see paint()). file transport.
+local function kitty_transmit_virtual(id, png, cols, rows)
+  emit(string.format("\27_Ga=T,U=1,i=%d,q=2,f=100,t=f,c=%d,r=%d;%s\27\\", id, cols, rows, b64(png)))
 end
 
---- Delete image id `id` and all its placements.
+--- Delete image id `id` and its placements.
 local function kitty_delete(id)
   emit("\27_Ga=d,d=i,i=" .. id .. ",q=2\27\\")
 end
 
---- Place a cropped slice of image `id` into the preview window.
----@param id integer
----@param win integer  preview window
----@param src_y integer  top of the source crop, in image pixels
----@param crop_h integer  height of the source crop, in image pixels
----@param img_w integer
-local function kitty_place(id, win, src_y, crop_h, img_w)
-  if not vim.api.nvim_win_is_valid(win) then
-    return
-  end
-  local pos = vim.api.nvim_win_get_position(win)
-  local cols = vim.api.nvim_win_get_width(win)
-  local rows = vim.api.nvim_win_get_height(win)
-  -- Move the real cursor to the window's top-left cell (1-based), place, and
-  -- leave the cursor put (C=1).
-  emit(string.format("\27[%d;%dH", pos[1] + 1, pos[2] + 1))
-  emit(string.format(
-    "\27_Ga=p,i=%d,p=%d,x=0,y=%d,w=%d,h=%d,c=%d,r=%d,C=1,q=2\27\\",
-    id, id, math.max(0, src_y), img_w, math.max(1, crop_h), cols, rows
-  ))
-end
-
 ----------------------------------------------------------------------
--- geometry + redraw
+-- geometry + paint
 ----------------------------------------------------------------------
 
 --- Estimated window pixel width for rendering (cols * cell_w).
@@ -234,38 +217,51 @@ local function preview_width_px(win)
   return math.max(200, vim.api.nvim_win_get_width(win) * cw)
 end
 
---- Compute the vertical source crop for the current source-window scroll.
-local function compute_crop(s)
+--- Total height of the rendered document in terminal cells.
+local function doc_rows(s, cols)
   local cw, ch = config.opts.preview.cell_pixels[1], config.opts.preview.cell_pixels[2]
-  local cols = vim.api.nvim_win_get_width(s.win)
-  local rows = vim.api.nvim_win_get_height(s.win)
-  -- Crop aspect must match the window aspect so the image isn't distorted.
-  local crop_h = math.floor(s.img_w * (rows * ch) / (cols * cw))
-  crop_h = math.min(crop_h, s.img_h)
-  -- Scroll fraction from the source window's first visible line.
-  local frac = 0
-  if config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
-    local total = vim.api.nvim_buf_line_count(s.src_buf)
-    local vis = vim.api.nvim_win_get_height(s.src_win)
-    local w0 = vim.api.nvim_win_call(s.src_win, function()
-      return vim.fn.line("w0")
-    end)
-    local denom = math.max(1, total - vis)
-    frac = math.min(1, math.max(0, (w0 - 1) / denom))
-  end
-  local src_y = math.floor(frac * math.max(0, s.img_h - crop_h))
-  return src_y, crop_h
+  local px_h = (cols * cw) * (s.img_h / s.img_w)
+  return math.max(1, math.min(kgp.MAX_CELLS, math.floor(px_h / ch + 0.5)))
 end
 
---- Re-place the current image for the current scroll position.
-local function redraw()
+--- Paint the visible slice of the image as placeholder cells in the preview
+--- buffer, scrolled to mirror the cursor's position in the source document.
+local function paint()
   local s = state
   if not s or not s.id or not vim.api.nvim_win_is_valid(s.win) then
     return
   end
-  local src_y, crop_h = compute_crop(s)
-  kitty_place(s.id, s.win, src_y, crop_h, s.img_w)
+  local cols = math.min(kgp.MAX_CELLS, vim.api.nvim_win_get_width(s.win))
+  local winrows = vim.api.nvim_win_get_height(s.win)
+  local total = s.total_rows or 1
+
+  -- Scroll fraction: mirror the cursor's position within the source document.
+  local frac = 0
+  if config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
+    local n = vim.api.nvim_buf_line_count(s.src_buf)
+    local cur = vim.api.nvim_win_get_cursor(s.src_win)[1]
+    frac = math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
+  end
+  local top = math.floor(frac * math.max(0, total - winrows) + 0.5)
+
+  local hl = kgp.id_highlight(s.id)
+  local lines = {}
+  for i = 0, winrows - 1 do
+    local img_row = top + i
+    lines[i + 1] = (img_row < total) and kgp.row_string(img_row, cols) or ""
+  end
+  vim.bo[s.buf].modifiable = true
+  vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, lines)
+  vim.bo[s.buf].modifiable = false
+  vim.api.nvim_buf_clear_namespace(s.buf, ns, 0, -1)
+  for i, line in ipairs(lines) do
+    if line ~= "" then
+      pcall(vim.api.nvim_buf_set_extmark, s.buf, ns, i - 1, 0, { end_col = #line, hl_group = hl })
+    end
+  end
 end
+
+local redraw = paint
 
 ----------------------------------------------------------------------
 -- lifecycle
@@ -277,6 +273,7 @@ local function refresh()
   if not s or not vim.api.nvim_win_is_valid(s.win) then
     return
   end
+  local cols = math.min(kgp.MAX_CELLS, vim.api.nvim_win_get_width(s.win))
   local width_px = preview_width_px(s.win)
   render_png(s.src_buf, width_px, function(png, w_or_err, h)
     if not state or state ~= s or not vim.api.nvim_win_is_valid(s.win) then
@@ -286,12 +283,13 @@ local function refresh()
       vim.notify("[mdrender] preview: " .. tostring(w_or_err), vim.log.levels.ERROR)
       return
     end
-    local new_id = (s.id == 1) and 2 or 1
-    kitty_transmit(new_id, png)
     s.img_w, s.img_h = w_or_err, h
+    s.total_rows = doc_rows(s, cols)
+    local new_id = (s.id == 1) and 2 or 1
+    kitty_transmit_virtual(new_id, png, cols, s.total_rows)
     local old = s.id
     s.id = new_id
-    redraw()
+    paint()
     if old then
       kitty_delete(old)
     end
@@ -363,6 +361,8 @@ function M.open()
   vim.wo[win].cursorline = false
   vim.wo[win].signcolumn = "no"
   vim.wo[win].list = false
+  vim.wo[win].wrap = false -- one buffer line == one screen row (placeholder grid)
+  vim.wo[win].conceallevel = 0
   vim.wo[win].winhighlight = "Normal:Normal"
   -- Fill with blank lines so no '~' end-of-buffer markers show under the image.
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(string.rep("\n", 400), "\n"))

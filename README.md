@@ -138,9 +138,10 @@ Two ways to view Markdown:
 How it works: the buffer is rendered to HTML with an Obsidian-like CSS theme
 (`marked` + `highlight.js` run client-side), screenshotted with **headless
 Chrome**, and the resulting image is displayed in a split via the **kitty
-graphics protocol**. The image is cropped to the preview window and scrolls to
-follow your cursor in the source window. It refreshes on save (or on every edit
-with `preview.refresh = "edit"`).
+graphics protocol** (Unicode-placeholder placements, so the image is anchored to
+buffer cells and survives redraws / works under tmux passthrough). The preview
+**scrolls to mirror your cursor position** in the source window, and refreshes on
+save (or on every edit with `preview.refresh = "edit"`).
 
 Requirements:
 
