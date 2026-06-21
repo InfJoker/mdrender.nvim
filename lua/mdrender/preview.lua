@@ -415,6 +415,12 @@ local function refresh_sidecar(reload)
     local frac = math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
     clipY = math.floor(frac * math.max(0, s.doc_h - clipH))
   end
+  -- On a pure scroll (no reload), skip if the clip position is unchanged — no
+  -- point re-rendering and re-writing the same image to the tty.
+  if not reload and s.last_clipY == clipY and s.last_cols == cols and s.last_winrows == winrows then
+    return
+  end
+  s.last_clipY, s.last_cols, s.last_winrows = clipY, cols, winrows
   if reload and not build_html(s.src_buf, s.html) then
     return
   end
@@ -571,7 +577,11 @@ function M.open()
     buffer = src_buf,
     callback = schedule_refresh,
   })
-  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "WinScrolled" }, {
+  -- Reposition on scroll/cursor moves. CursorMovedI (every keystroke in insert
+  -- mode) is deliberately excluded: re-rendering + writing graphics to the tty
+  -- on every keystroke races Neovim's own output and corrupts the display.
+  -- WinScrolled still keeps the preview in sync while typing pushes the view.
+  vim.api.nvim_create_autocmd({ "CursorMoved", "WinScrolled" }, {
     group = group,
     callback = function()
       vim.schedule(redraw)

@@ -1,26 +1,48 @@
 'use strict';
 // Persistent render sidecar for mdrender.nvim.
 //
-// Connects to a warm chrome-headless-shell over the Chrome DevTools Protocol
-// using Node's built-in WebSocket + fetch (Node 21+/22+; no npm dependencies).
-// Reads one JSON request per line on stdin and writes one JSON response per
-// line on stdout. It keeps the page loaded between requests so it can capture
-// just the *visible clip* of a (possibly very long) document cheaply.
+// Spawns and OWNS a chrome-headless-shell child and talks to it over the Chrome
+// DevTools Protocol (Node's built-in WebSocket + fetch — no npm dependencies).
+// Reads one JSON request per line on stdin, writes one JSON response per line on
+// stdout, and keeps the page loaded between requests so it can capture just the
+// *visible clip* of a (possibly very long) document cheaply.
+//
+// Owning chrome here (rather than letting Neovim spawn it) means chrome can't be
+// orphaned: when Neovim exits — cleanly OR by crash — our stdin closes and we
+// kill chrome and exit. We also clean up on SIGTERM/SIGINT and if chrome dies.
 //
 //   req:  {"html":"/abs/page.html","reload":true,"clipY":0,"clipH":680,
 //          "width":760,"scale":2,"out":"/abs/out.png"}
-//   resp: {"ok":true,"out":"...","docW":760,"docH":11914}
-//        |{"ok":false,"err":"..."}
+//   resp: {"ok":true,"out":"...","docW":760,"docH":11914} | {"ok":false,"err":"..."}
 //
-// Emits "READY" on stderr once connected.
+// Emits "READY" on stderr once connected.  Env: MDR_CHROME = chrome binary path.
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const readline = require('readline');
+const { spawn } = require('child_process');
 
-const PORT = parseInt(process.env.MDR_CDP_PORT || '9222', 10);
+const CHROME = process.env.MDR_CHROME;
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'mdr-chrome-'));
+
+let chrome;
 let ws;
 let msgId = 0;
 const pending = new Map();
 let eventWaiters = [];
+let down = false;
+
+function cleanup(code) {
+  if (down) return;
+  down = true;
+  try {
+    if (chrome) chrome.kill('SIGKILL');
+  } catch (_) {}
+  try {
+    fs.rmSync(profile, { recursive: true, force: true });
+  } catch (_) {}
+  process.exit(code || 0);
+}
 
 function send(method, params) {
   const id = ++msgId;
@@ -46,22 +68,44 @@ function waitEvent(method, timeoutMs) {
   });
 }
 
+// Spawn chrome and resolve once it prints its DevTools websocket URL.
+function startChrome() {
+  return new Promise((resolve, reject) => {
+    chrome = spawn(
+      CHROME,
+      [
+        '--headless', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
+        '--allow-file-access-from-files', '--remote-allow-origins=*',
+        '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank',
+      ],
+      { stdio: ['ignore', 'ignore', 'pipe'] }
+    );
+    chrome.on('error', reject);
+    chrome.on('exit', () => cleanup(1));
+    let buf = '';
+    const to = setTimeout(() => reject(new Error('chrome start timeout')), 15000);
+    chrome.stderr.on('data', (d) => {
+      buf += d;
+      const m = buf.match(/ws:\/\/[^\s]+/);
+      if (m) {
+        clearTimeout(to);
+        resolve(m[0]);
+      }
+    });
+  });
+}
+
 async function connect() {
-  // Reuse an existing page target if there is one, else create it.
-  let target;
-  try {
-    const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-    target = list.find((t) => t.type === 'page');
-  } catch (_) {}
-  if (!target) {
-    const r = await fetch(`http://127.0.0.1:${PORT}/json/new`, { method: 'PUT' });
-    target = await r.json();
-  }
+  const browserWs = await startChrome();
+  const port = new URL(browserWs).port;
+  // Create a page target and connect to it (Page.* needs a page, not browser).
+  const target = await (await fetch(`http://127.0.0.1:${port}/json/new`, { method: 'PUT' })).json();
   ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((res, rej) => {
     ws.addEventListener('open', res, { once: true });
     ws.addEventListener('error', rej, { once: true });
   });
+  ws.addEventListener('close', () => cleanup(1));
   ws.addEventListener('message', (ev) => {
     const m = JSON.parse(ev.data);
     if (m.id && pending.has(m.id)) {
@@ -83,8 +127,6 @@ async function connect() {
 
 async function handle(req) {
   if (req.reload) {
-    // Lay the page out at exactly the requested width so the clip aligns and
-    // the measured height is correct. Capture resolution is set via clip.scale.
     await send('Emulation.setDeviceMetricsOverride', {
       width: req.width || 760,
       height: 1200,
@@ -99,13 +141,12 @@ async function handle(req) {
   const cs = metrics.cssContentSize || metrics.contentSize;
   const docW = Math.ceil(cs.width);
   const docH = Math.ceil(cs.height);
-  const scale = req.scale || 1;
   const clip = {
     x: 0,
     y: Math.max(0, Math.min(req.clipY || 0, Math.max(0, docH - (req.clipH || docH)))),
     width: req.width || docW,
     height: req.clipH || docH,
-    scale: scale,
+    scale: req.scale || 1,
   };
   const shot = await send('Page.captureScreenshot', {
     format: 'png',
@@ -116,10 +157,15 @@ async function handle(req) {
   return { ok: true, out: req.out, docW: docW, docH: docH, clipY: clip.y };
 }
 
+process.on('SIGTERM', () => cleanup(0));
+process.on('SIGINT', () => cleanup(0));
+
 (async () => {
   await connect();
   process.stderr.write('READY\n');
   const rl = readline.createInterface({ input: process.stdin });
+  // When Neovim exits (clean or crash), stdin closes — tear chrome down too.
+  rl.on('close', () => cleanup(0));
   for await (const line of rl) {
     if (!line.trim()) continue;
     let req;
@@ -136,5 +182,5 @@ async function handle(req) {
   }
 })().catch((e) => {
   process.stderr.write('FATAL ' + e + '\n');
-  process.exit(1);
+  cleanup(1);
 });
