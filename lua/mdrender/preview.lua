@@ -366,17 +366,25 @@ end
 -- lifecycle
 ----------------------------------------------------------------------
 
---- Swap a freshly-rendered PNG in: transmit it, repaint, delete the old image.
+--- Show a freshly-rendered PNG. Uses a SINGLE image id: re-transmitting replaces
+--- the image behind the (unchanged) placeholder cells, so a plain scroll
+--- re-render swaps only the image content — no buffer repaint, no old-image
+--- delete. The placeholders are repainted only when the geometry changes (or in
+--- CLI mode, which scrolls by re-painting at an offset). This removes the
+--- per-scroll buffer churn that caused the flicker.
 local function swap_in(s, png, cols, rows)
-  local new_id = (s.id == ID_A) and ID_B or ID_A
-  if not kitty_transmit_virtual(new_id, png, cols, rows) then
+  local id = s.id or ID_A
+  if not kitty_transmit_virtual(id, png, cols, rows) then
     return
   end
-  local old = s.id
-  s.id = new_id
-  paint()
-  if old then
-    kitty_delete(old)
+  local need_paint = s.id ~= id
+    or s.painted_cols ~= cols
+    or s.painted_rows ~= rows
+    or s.mode == "cli"
+  s.id = id
+  s.painted_cols, s.painted_rows = cols, rows
+  if need_paint then
+    paint()
   end
 end
 
@@ -484,6 +492,21 @@ local function schedule_refresh()
     pending = false
     render_content()
   end, 120)
+end
+
+-- Debounce scroll/cursor repositioning: while you scroll continuously, coalesce
+-- to one re-clip after the view settles (~60ms) instead of a Chrome render per
+-- step — the main "not smooth" cause.
+local redraw_pending = false
+local function schedule_redraw()
+  if redraw_pending then
+    return
+  end
+  redraw_pending = true
+  vim.defer_fn(function()
+    redraw_pending = false
+    redraw()
+  end, 60)
 end
 
 --- Whether the graphical preview can run here. Unlike inline images, the
@@ -601,9 +624,7 @@ function M.open()
   -- WinScrolled still keeps the preview in sync while typing pushes the view.
   vim.api.nvim_create_autocmd({ "CursorMoved", "WinScrolled" }, {
     group = group,
-    callback = function()
-      vim.schedule(redraw)
-    end,
+    callback = schedule_redraw,
   })
   vim.api.nvim_create_autocmd({ "VimResized", "WinResized" }, {
     group = group,
