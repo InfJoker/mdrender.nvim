@@ -12,6 +12,7 @@
 local config = require("mdrender.config")
 local gpu = require("mdrender.gpu")
 local kgp = require("mdrender.kgp")
+local sidecar = require("mdrender.sidecar")
 
 local M = {}
 
@@ -351,21 +352,34 @@ local function paint()
   end
 end
 
-local redraw = paint
-
 ----------------------------------------------------------------------
 -- lifecycle
 ----------------------------------------------------------------------
 
---- Re-render the PNG and swap it in (double-buffered to avoid flicker).
-local function refresh()
+--- Swap a freshly-rendered PNG in: transmit it, repaint, delete the old image.
+local function swap_in(s, png, cols, rows)
+  local new_id = (s.id == 1) and 2 or 1
+  if not kitty_transmit_virtual(new_id, png, cols, rows) then
+    return
+  end
+  local old = s.id
+  s.id = new_id
+  paint()
+  if old then
+    kitty_delete(old)
+  end
+end
+
+--- CLI fallback: re-render the whole document with headless Chrome (two passes,
+--- ~0.5s). The whole doc maps to the placeholder grid, so it's capped/squished
+--- past 297 rows.
+local function refresh_cli()
   local s = state
   if not s or not vim.api.nvim_win_is_valid(s.win) then
     return
   end
   local cols = math.min(kgp.MAX_CELLS, vim.api.nvim_win_get_width(s.win))
-  local width_px = preview_width_px(s.win)
-  render_png(s.src_buf, width_px, function(png, w_or_err, h)
+  render_png(s.src_buf, preview_width_px(s.win), function(png, w_or_err, h)
     if not state or state ~= s or not vim.api.nvim_win_is_valid(s.win) then
       return
     end
@@ -375,15 +389,71 @@ local function refresh()
     end
     s.img_w, s.img_h = w_or_err, h
     s.total_rows = doc_rows(s, cols)
-    local new_id = (s.id == 1) and 2 or 1
-    kitty_transmit_virtual(new_id, png, cols, s.total_rows)
-    local old = s.id
-    s.id = new_id
-    paint()
-    if old then
-      kitty_delete(old)
-    end
+    swap_in(s, png, cols, s.total_rows)
   end)
+end
+
+--- Fast path: capture only the visible clip via the persistent sidecar. The
+--- slice already IS the visible window, so there's no 297-row cap (any length
+--- works) and scrolling just re-clips (~0.1s). `reload` rebuilds the page.
+local function refresh_sidecar(reload)
+  local s = state
+  if not s or not vim.api.nvim_win_is_valid(s.win) then
+    return
+  end
+  local cols = math.min(kgp.MAX_CELLS, vim.api.nvim_win_get_width(s.win))
+  local winrows = vim.api.nvim_win_get_height(s.win)
+  local cw, ch = config.opts.preview.cell_pixels[1], config.opts.preview.cell_pixels[2]
+  local clipH = winrows * ch
+  local clipY = 0
+  if s.doc_h and config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
+    local n = vim.api.nvim_buf_line_count(s.src_buf)
+    local cur = vim.api.nvim_win_get_cursor(s.src_win)[1]
+    local frac = math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
+    clipY = math.floor(frac * math.max(0, s.doc_h - clipH))
+  end
+  if reload and not build_html(s.src_buf, s.html) then
+    return
+  end
+  local out = s.tmpdir .. (s.id == 1 and "/b.png" or "/a.png")
+  sidecar.render({
+    html = s.html,
+    reload = reload and true or false,
+    clipY = clipY,
+    clipH = clipH,
+    width = cols * cw,
+    scale = config.opts.preview.scale,
+    out = out,
+  }, function(r)
+    if not state or state ~= s or not r or not r.ok then
+      return
+    end
+    s.doc_h = r.docH
+    s.total_rows = winrows -- the slice fills the window; no scroll offset in paint
+    swap_in(s, out, cols, winrows)
+  end)
+end
+
+--- Content changed → full re-render.
+local function render_content()
+  if state and state.mode == "sidecar" then
+    refresh_sidecar(true)
+  else
+    refresh_cli()
+  end
+end
+
+--- Scroll / cursor moved → reposition (sidecar re-clips; CLI just re-paints).
+local function redraw()
+  local s = state
+  if not s then
+    return
+  end
+  if s.mode == "sidecar" then
+    refresh_sidecar(false)
+  else
+    paint()
+  end
 end
 
 local pending = false
@@ -394,8 +464,8 @@ local function schedule_refresh()
   pending = true
   vim.defer_fn(function()
     pending = false
-    refresh()
-  end, 150)
+    render_content()
+  end, 120)
 end
 
 --- Whether the graphical preview can run here. Unlike inline images, the
@@ -441,21 +511,15 @@ function M.open()
     return
   end
 
-  -- Warm the renderer so the first refresh isn't slowed by Chrome's cold start.
-  -- Also nudge the user toward chrome-headless-shell if we fell back to full
-  -- Chrome (≈9x slower per render).
   local chrome = find_chrome()
-  if chrome then
-    pcall(vim.system, { chrome, "--headless=new", "--dump-dom", "about:blank" }, {})
-    if not using_shell and not vim.g._mdrender_shell_hint then
-      vim.g._mdrender_shell_hint = true
-      vim.schedule(function()
-        vim.notify(
-          "[mdrender] preview is using full Chrome (~4s/refresh). For ~0.5s, run:  :MdRender install",
-          vim.log.levels.INFO
-        )
-      end)
-    end
+  if chrome and not using_shell and not vim.g._mdrender_shell_hint then
+    vim.g._mdrender_shell_hint = true
+    vim.schedule(function()
+      vim.notify(
+        "[mdrender] tip: install chrome-headless-shell for a lighter/faster preview:  :MdRender install",
+        vim.log.levels.INFO
+      )
+    end)
   end
 
   local src_buf = vim.api.nvim_get_current_buf()
@@ -477,7 +541,19 @@ function M.open()
   -- Fill with blank lines so no '~' end-of-buffer markers show under the image.
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(string.rep("\n", 400), "\n"))
 
-  state = { win = win, buf = buf, src_win = src_win, src_buf = src_buf, id = nil, tmpdir = nil }
+  local tmpdir = vim.fn.tempname()
+  vim.fn.mkdir(tmpdir, "p")
+  state = {
+    win = win,
+    buf = buf,
+    src_win = src_win,
+    src_buf = src_buf,
+    id = nil,
+    tmpdir = tmpdir,
+    html = tmpdir .. "/page.html",
+    doc_h = nil,
+    mode = "cli", -- upgraded to "sidecar" once it's ready
+  }
 
   -- Return focus to the source window — you keep editing on the left.
   vim.api.nvim_set_current_win(src_win)
@@ -510,10 +586,23 @@ function M.open()
       end
     end,
   })
+  -- Make sure the chrome + node sidecar don't linger if nvim exits.
+  vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = M.close })
 
-  -- Debounced so it coalesces with the WinResized fired by opening the split
-  -- (otherwise we'd render the PNG twice on startup).
-  schedule_refresh()
+  -- Start the persistent sidecar (warm chrome + node over CDP) for fast,
+  -- uncapped, scroll-following renders. The first render waits for it; if it
+  -- can't start (no node, etc.) we fall back to the CLI path.
+  if chrome and vim.fn.executable("node") == 1 then
+    sidecar.start(chrome, function(ok)
+      if not state then
+        return -- closed while starting
+      end
+      state.mode = ok and "sidecar" or "cli"
+      render_content()
+    end)
+  else
+    render_content()
+  end
 end
 
 --- Close the preview and clean up the image + window.
@@ -528,6 +617,7 @@ function M.close()
     kitty_delete(1)
     kitty_delete(2)
   end
+  sidecar.stop()
   if s.win and vim.api.nvim_win_is_valid(s.win) then
     pcall(vim.api.nvim_win_close, s.win, true)
   end

@@ -136,12 +136,20 @@ Two ways to view Markdown:
 ```
 
 How it works: the buffer is rendered to HTML with an Obsidian-like CSS theme
-(`marked` + `highlight.js` run client-side), screenshotted with **headless
-Chrome**, and the resulting image is displayed in a split via the **kitty
-graphics protocol** (Unicode-placeholder placements, so the image is anchored to
-buffer cells and survives redraws / works under tmux passthrough). The preview
-**scrolls to mirror your cursor position** in the source window, and refreshes on
-save (or on every edit with `preview.refresh = "edit"`).
+(`marked` + `highlight.js` run client-side), captured with **headless Chrome**,
+and displayed in a split via the **kitty graphics protocol** (Unicode-placeholder
+placements, so the image is anchored to buffer cells and survives redraws / works
+under tmux passthrough). The preview **scrolls to mirror your cursor position**
+in the source window, and refreshes on save (or on every edit with
+`preview.refresh = "edit"`).
+
+For speed it keeps a **persistent renderer warm** (a `chrome-headless-shell`
+driven over the DevTools protocol by a tiny Node sidecar — no npm dependencies,
+uses Node's built-in WebSocket). Each refresh captures just the **visible slice**,
+so renders are ~0.1–0.3s, scrolling is smooth, and **documents of any length**
+render at full quality (no row cap). If Node isn't available it falls back to a
+slower per-refresh `chrome-headless-shell`/Chrome invocation (which caps very
+long docs).
 
 Requirements:
 
@@ -156,6 +164,9 @@ Requirements:
 
   Otherwise the plugin falls back to full **Google Chrome / Chromium** on
   `PATH` (slower cold start). Override with `preview.chrome`.
+- **Node.js** (optional but recommended): enables the persistent warm renderer
+  (~0.1–0.3s refresh, smooth scroll, any document length). Without it, rendering
+  still works but is slower per refresh and caps very long docs.
 - **Inside tmux:** add `set -g allow-passthrough all` to your tmux config (must
   be `all`, not `on` — Neovim runs in the alternate screen). With that, the
   preview works inside tmux too.
