@@ -451,8 +451,7 @@ function M.open()
       vim.g._mdrender_shell_hint = true
       vim.schedule(function()
         vim.notify(
-          "[mdrender] preview uses full Chrome (~4s/refresh). For ~0.5s, install the lightweight shell:\n"
-            .. "  npx @puppeteer/browsers install chrome-headless-shell@stable",
+          "[mdrender] preview is using full Chrome (~4s/refresh). For ~0.5s, run:  :MdRender install",
           vim.log.levels.INFO
         )
       end)
@@ -551,6 +550,40 @@ end
 
 function M.is_open()
   return state ~= nil
+end
+
+--- Where chrome-headless-shell is installed (a path find_headless_shell() globs).
+local INSTALL_PATH = vim.fn.expand("~/.cache/puppeteer")
+
+--- Install the lightweight chrome-headless-shell (~9x faster previews) via
+--- Puppeteer's browser installer. Used by `:MdRender install` and as the
+--- recommended lazy.nvim `build` step. Safe no-op if it's already present.
+---@param cb? fun(ok: boolean)
+function M.install(cb)
+  cb = cb or function() end
+  if find_headless_shell() then
+    vim.notify("[mdrender] chrome-headless-shell already installed")
+    return cb(true)
+  end
+  if vim.fn.executable("npx") ~= 1 then
+    vim.notify("[mdrender] need Node.js (npx) to install chrome-headless-shell", vim.log.levels.ERROR)
+    return cb(false)
+  end
+  vim.fn.mkdir(INSTALL_PATH, "p")
+  vim.notify("[mdrender] installing chrome-headless-shell (one-time download)…")
+  vim.system(
+    { "npx", "--yes", "@puppeteer/browsers", "install", "chrome-headless-shell@stable", "--path", INSTALL_PATH },
+    { text = true },
+    vim.schedule_wrap(function(res)
+      local ok = res.code == 0 and find_headless_shell() ~= nil
+      if ok then
+        vim.notify("[mdrender] chrome-headless-shell installed — previews are now ~9x faster.")
+      else
+        vim.notify("[mdrender] install failed:\n" .. (res.stderr or res.stdout or "?"), vim.log.levels.ERROR)
+      end
+      cb(ok)
+    end)
+  )
 end
 
 -- exposed for tests
