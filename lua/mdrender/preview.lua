@@ -316,31 +316,6 @@ local function doc_rows(s, cols)
   return math.max(1, math.min(kgp.MAX_CELLS, math.floor(px_h / ch + 0.5)))
 end
 
---- Scroll fraction: the cursor's position within the source document (0..1).
-local function scroll_frac(s)
-  if config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
-    local n = vim.api.nvim_buf_line_count(s.src_buf)
-    local cur = vim.api.nvim_win_get_cursor(s.src_win)[1]
-    return math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
-  end
-  return 0
-end
-
---- Image row at the top of the viewport for the current scroll position.
---- Sidecar bands map doc pixels 1:1 (offset within the band); the CLI image is
---- the whole document scaled into `total` rows.
-local function top_row(s, winrows, total)
-  local ch = config.opts.preview.cell_pixels[2]
-  local top
-  if s.band_y0 ~= nil and s.doc_h then
-    local target_y = scroll_frac(s) * math.max(0, s.doc_h - winrows * ch)
-    top = math.floor((target_y - s.band_y0) / ch + 0.5)
-  else
-    top = math.floor(scroll_frac(s) * math.max(0, total - winrows) + 0.5)
-  end
-  return math.max(0, math.min(top, math.max(0, total - winrows)))
-end
-
 --- Paint the visible slice of the image as placeholder cells in the preview
 --- buffer, scrolled to mirror the cursor's position in the source document.
 local function paint()
@@ -351,7 +326,15 @@ local function paint()
   local cols = math.min(kgp.MAX_CELLS, vim.api.nvim_win_get_width(s.win))
   local winrows = vim.api.nvim_win_get_height(s.win)
   local total = s.total_rows or 1
-  local top = top_row(s, winrows, total)
+
+  -- Scroll fraction: mirror the cursor's position within the source document.
+  local frac = 0
+  if config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
+    local n = vim.api.nvim_buf_line_count(s.src_buf)
+    local cur = vim.api.nvim_win_get_cursor(s.src_win)[1]
+    frac = math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
+  end
+  local top = math.floor(frac * math.max(0, total - winrows) + 0.5)
 
   local hl = kgp.id_highlight(s.id)
   -- The preview buffer holds `winrows` empty real lines; each gets an *overlay*
@@ -420,46 +403,52 @@ local function refresh_cli()
   end)
 end
 
---- Fast path: render a tall BAND (up to the 297-cell max) around the cursor via
---- the persistent sidecar, then scroll *within* it by re-painting placeholders
---- (no Chrome, no re-transmit — smooth, no flicker). Only called to (re)render
---- the band: on content change (`reload`) or when scrolling past the band edge.
---- If the whole document fits in one band it's rendered once and never again.
+--- Fast path: capture only the visible clip via the persistent sidecar. The
+--- slice already IS the visible window, so there's no 297-row cap (any length
+--- works) and scrolling just re-clips (~0.1s). `reload` rebuilds the page.
 local function refresh_sidecar(reload)
   local s = state
   if not s or not vim.api.nvim_win_is_valid(s.win) then
     return
   end
-  if s.band_pending and not reload then
-    return -- a band render is already in flight; don't pile on while scrolling
-  end
   local cols = math.min(kgp.MAX_CELLS, vim.api.nvim_win_get_width(s.win))
+  local winrows = vim.api.nvim_win_get_height(s.win)
   local cw, ch = config.opts.preview.cell_pixels[1], config.opts.preview.cell_pixels[2]
+  local clipH = winrows * ch
+  local clipY = 0
+  if s.doc_h and config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
+    local n = vim.api.nvim_buf_line_count(s.src_buf)
+    local cur = vim.api.nvim_win_get_cursor(s.src_win)[1]
+    local frac = math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
+    clipY = math.floor(frac * math.max(0, s.doc_h - clipH))
+  end
+  -- On a pure scroll (no reload), skip if the clip position is unchanged — no
+  -- point re-rendering and re-writing the same image to the tty.
+  if not reload and s.last_clipY == clipY and s.last_cols == cols and s.last_winrows == winrows then
+    return
+  end
   if reload and not build_html(s.src_buf, s.html) then
     return
   end
   local out = s.tmpdir .. (s.id == ID_A and "/b.png" or "/a.png")
-  s.band_pending = true
   sidecar.render({
     html = s.html,
     reload = reload and true or false,
-    frac = scroll_frac(s),
-    maxH = kgp.MAX_CELLS * ch, -- tallest band the placeholder grid can address
+    clipY = clipY,
+    clipH = clipH,
     width = cols * cw,
     scale = config.opts.preview.scale,
     out = out,
   }, function(r)
-    if not state or state ~= s then
-      return
+    if not state or state ~= s or not r or not r.ok then
+      return -- leave the skip-cache untouched so a transient failure retries
     end
-    s.band_pending = false
-    if not r or not r.ok then
-      return
-    end
+    -- Record the rendered position only after success, so a failed build/render
+    -- doesn't poison the cache and permanently skip repainting this clip.
+    s.last_clipY, s.last_cols, s.last_winrows = clipY, cols, winrows
     s.doc_h = r.docH
-    s.band_y0 = r.bandY or 0
-    s.total_rows = math.max(1, math.floor((r.bandH or r.docH) / ch + 0.5))
-    swap_in(s, out, cols, s.total_rows)
+    s.total_rows = winrows -- the slice fills the window; no scroll offset in paint
+    swap_in(s, out, cols, winrows)
   end)
 end
 
@@ -472,27 +461,13 @@ local function render_content()
   end
 end
 
---- Scroll / cursor moved → reposition. If the target viewport is inside the
---- rendered band, just re-paint (smooth, no Chrome/transmit). Otherwise render a
---- fresh band around the new position. CLI mode always re-paints.
+--- Scroll / cursor moved → reposition (sidecar re-clips; CLI just re-paints).
 local function redraw()
   local s = state
   if not s then
     return
   end
   if s.mode == "sidecar" then
-    if s.id and s.band_y0 ~= nil and s.doc_h then
-      local winrows = vim.api.nvim_win_get_height(s.win)
-      local ch = config.opts.preview.cell_pixels[2]
-      -- Where the viewport wants to be, relative to the band (unclamped).
-      local target_y = scroll_frac(s) * math.max(0, s.doc_h - winrows * ch)
-      local want = math.floor((target_y - s.band_y0) / ch + 0.5)
-      paint() -- always repaint (clamps into the band)
-      if want >= 0 and want + winrows <= (s.total_rows or 0) then
-        return -- target is inside the band: nothing more to do
-      end
-      -- scrolled past the band edge: render a fresh band around the new position
-    end
     refresh_sidecar(false)
   else
     paint()
