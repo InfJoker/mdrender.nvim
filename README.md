@@ -148,11 +148,9 @@ Requirements:
 - A **kitty-graphics terminal** (kitty / Ghostty / WezTerm).
 - **Google Chrome / Chromium** on `PATH` (auto-detected; or set
   `preview.chrome`).
-- **Inside tmux:** requires **Neovim 0.11+** (for `nvim_ui_send`, so the graphics
-  escapes survive tmux) **and** `set -g allow-passthrough all` in your tmux
-  config. On Neovim 0.10 the graphical preview only works in a **bare kitty
-  window** (no tmux) — but the in-buffer rendering (`:MdRender toggle`) works
-  everywhere, tmux included.
+- **Inside tmux:** add `set -g allow-passthrough all` to your tmux config (must
+  be `all`, not `on` — Neovim runs in the alternate screen). With that, the
+  preview works inside tmux too.
 
 Config (defaults):
 

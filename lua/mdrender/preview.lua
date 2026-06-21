@@ -161,12 +161,39 @@ local function tmux_wrap(seq)
   return "\27Ptmux;" .. seq:gsub("\27", "\27\27") .. "\27\\"
 end
 
---- Write raw bytes to the terminal. Use Neovim's UI output stream so the bytes
---- interleave cleanly with its rendering (writing to /dev/tty races the TUI and
---- gets clobbered — this was why the image never appeared).
+--- Write raw bytes to the terminal. Plain io.stdout (C stdio) races Neovim's
+--- libuv TUI writes on fd 1 and the sequence gets split/clobbered (flaky or
+--- blank). Instead write through a libuv TTY handle on fd 1 — the same queue
+--- Neovim's UI uses — so the bytes are ordered cleanly. Prefer nvim_ui_send
+--- (0.11+) when available; it's the official channel.
+--- Resolve the real terminal device path (e.g. /dev/ttys008). The generic
+--- /dev/tty alias fails to open when Neovim has no controlling terminal (e.g.
+--- launched via `open`/launchd), but the concrete device — reported by `tty`,
+--- whose stdin Neovim inherits — opens fine. This is how image.nvim does it.
+local function tty_path()
+  local p = io.popen("tty 2>/dev/null")
+  if not p then
+    return nil
+  end
+  local t = (p:read("*a") or ""):gsub("%s+$", "")
+  p:close()
+  return t:match("^/dev/") and t or nil
+end
+
+local tty_handle = nil
 local function term_write(seq)
   if vim.api.nvim_ui_send then
     vim.api.nvim_ui_send(seq)
+    return
+  end
+  -- Write to the tty device (a separate fd from Neovim's fd-1 TUI writes), each
+  -- complete escape sequence in one flushed write so the TUI can't split it.
+  if tty_handle == nil then
+    tty_handle = io.open(tty_path() or "/dev/tty", "w") or false
+  end
+  if tty_handle then
+    tty_handle:write(seq)
+    tty_handle:flush()
   else
     io.stdout:write(seq)
     io.stdout:flush()
@@ -344,18 +371,6 @@ local function preview_available()
     return false, "not a kitty-graphics terminal (kitty/Ghostty/WezTerm)"
   end
   if vim.env.TMUX then
-    -- Inside tmux, the graphics escapes must be emitted through Neovim's own UI
-    -- output stream (nvim_ui_send) so the tmux passthrough sequence stays intact.
-    -- That API only exists in Neovim 0.11+. On 0.10 the escapes get split by the
-    -- TUI's own writes and tmux drops them, leaving a blank preview.
-    if not vim.api.nvim_ui_send then
-      return false,
-        "Graphical preview inside tmux needs Neovim 0.11+ (for clean graphics output).\n"
-          .. "  On Neovim 0.10, tmux drops the kitty graphics escapes. Either:\n"
-          .. "    • run the preview in a bare kitty window/tab (no tmux), or\n"
-          .. "    • upgrade Neovim to 0.11+.\n"
-          .. "  (The in-buffer rendering — :MdRender toggle — works everywhere.)"
-    end
     -- Must be "all", not "on": Neovim runs in the alternate screen, where tmux
     -- only forwards graphics passthrough when allow-passthrough is "all".
     local pt = vim.trim(vim.fn.system({ "tmux", "show", "-gv", "allow-passthrough" }))
@@ -443,7 +458,9 @@ function M.open()
     end,
   })
 
-  refresh()
+  -- Debounced so it coalesces with the WinResized fired by opening the split
+  -- (otherwise we'd render the PNG twice on startup).
+  schedule_refresh()
 end
 
 --- Close the preview and clean up the image + window.
