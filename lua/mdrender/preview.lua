@@ -316,73 +316,96 @@ local function doc_rows(s, cols)
   return math.max(1, math.min(kgp.MAX_CELLS, math.floor(px_h / ch + 0.5)))
 end
 
---- Paint the visible slice of the image as placeholder cells in the preview
---- buffer, scrolled to mirror the cursor's position in the source document.
-local function paint()
-  local s = state
+--- Scroll fraction: the cursor's position within the source document (0..1).
+local function scroll_frac(s)
+  if config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
+    local n = vim.api.nvim_buf_line_count(s.src_buf)
+    local cur = vim.api.nvim_win_get_cursor(s.src_win)[1]
+    return math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
+  end
+  return 0
+end
+
+--- Image row that should sit at the top of the viewport for the current cursor.
+--- Sidecar bands map doc pixels 1:1 within the band (offset by band_y0); the CLI
+--- image is the whole doc scaled into `total` rows.
+local function top_row(s, winrows, total)
+  local ch = config.opts.preview.cell_pixels[2]
+  local top
+  if s.band_y0 ~= nil and s.doc_h then
+    local target_y = scroll_frac(s) * math.max(0, s.doc_h - winrows * ch)
+    top = math.floor((target_y - s.band_y0) / ch + 0.5)
+  else
+    top = math.floor(scroll_frac(s) * math.max(0, total - winrows) + 0.5)
+  end
+  return math.max(0, math.min(top, math.max(0, total - winrows)))
+end
+
+--- Paint the WHOLE image as placeholder cells — one buffer line per image row.
+--- Every row of the kitty placement must be covered by a placeholder or it won't
+--- render. The viewport then scrolls *within* this via scroll_view (no re-paint,
+--- no transmit), which is what makes scrolling smooth and leak-free.
+local function paint_band(s)
   if not s or not s.id or not vim.api.nvim_win_is_valid(s.win) then
     return
   end
   local cols = math.min(kgp.MAX_CELLS, vim.api.nvim_win_get_width(s.win))
-  local winrows = vim.api.nvim_win_get_height(s.win)
   local total = s.total_rows or 1
-
-  -- Scroll fraction: mirror the cursor's position within the source document.
-  local frac = 0
-  if config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
-    local n = vim.api.nvim_buf_line_count(s.src_buf)
-    local cur = vim.api.nvim_win_get_cursor(s.src_win)[1]
-    frac = math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
-  end
-  local top = math.floor(frac * math.max(0, total - winrows) + 0.5)
-
   local hl = kgp.id_highlight(s.id)
-  -- The preview buffer holds `winrows` empty real lines; each gets an *overlay*
-  -- virtual-text of its placeholder row. Virtual text (not buffer text) avoids
-  -- Neovim mangling the placeholder char + combining diacritics, matching how
-  -- snacks.nvim renders kitty placeholders.
   local empty = {}
-  for i = 1, winrows do
+  for i = 1, total do
     empty[i] = ""
   end
   vim.bo[s.buf].modifiable = true
   vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, empty)
   vim.bo[s.buf].modifiable = false
   vim.api.nvim_buf_clear_namespace(s.buf, ns, 0, -1)
-  for i = 0, winrows - 1 do
-    local img_row = top + i
-    if img_row < total then
-      pcall(vim.api.nvim_buf_set_extmark, s.buf, ns, i, 0, {
-        virt_text = { { kgp.row_string(img_row, cols), hl } },
-        virt_text_pos = "overlay",
-        virt_text_win_col = 0,
-        virt_text_hide = false,
-      })
-    end
+  for img_row = 0, total - 1 do
+    pcall(vim.api.nvim_buf_set_extmark, s.buf, ns, img_row, 0, {
+      virt_text = { { kgp.row_string(img_row, cols), hl } },
+      virt_text_pos = "overlay",
+      virt_text_win_col = 0,
+      virt_text_hide = false,
+    })
   end
+end
+
+--- Scroll the preview window so the cursor's image row is at the top. Cheap and
+--- smooth: NO Chrome, NO transmit, NO graphics write — just a view move. This is
+--- what runs on every scroll within a band, so scrolling never touches the tty.
+local function scroll_view(s)
+  if not s or not s.id or not vim.api.nvim_win_is_valid(s.win) then
+    return
+  end
+  local winrows = vim.api.nvim_win_get_height(s.win)
+  local total = s.total_rows or 1
+  local top = top_row(s, winrows, total)
+  vim.api.nvim_win_call(s.win, function()
+    vim.fn.winrestview({ topline = top + 1, lnum = math.min(total, top + 1), col = 0, leftcol = 0 })
+  end)
 end
 
 ----------------------------------------------------------------------
 -- lifecycle
 ----------------------------------------------------------------------
 
---- Show a freshly-rendered PNG: transmit it to the *other* of our two image ids
---- (always fresh, never the one currently on screen, so no re-transmit flash),
---- then repaint the placeholders to point at it. The previous image is NOT
---- deleted — only two ids ever alternate, each replaced (not deleted) when
---- reused, and deleting an on-screen image during the swap flickers.
+--- Show a freshly-rendered band PNG: transmit to the *other* of our two image
+--- ids (no re-transmit flash, no delete), paint all its placeholder rows, then
+--- scroll the window to the cursor. Transmits happen ONLY here — on a content
+--- change or a band-edge crossing — not on every scroll.
 local function swap_in(s, png, cols, rows)
   local new_id = (s.id == ID_A) and ID_B or ID_A
   if not kitty_transmit_virtual(new_id, png, cols, rows) then
     return
   end
   s.id = new_id
-  paint()
+  paint_band(s)
+  scroll_view(s)
 end
 
 --- CLI fallback: re-render the whole document with headless Chrome (two passes,
---- ~0.5s). The whole doc maps to the placeholder grid, so it's capped/squished
---- past 297 rows.
+--- ~0.5s). The whole doc maps to the placeholder grid (capped at 297 rows), then
+--- the window scrolls within it.
 local function refresh_cli()
   local s = state
   if not s or not vim.api.nvim_win_is_valid(s.win) then
@@ -398,57 +421,57 @@ local function refresh_cli()
       return
     end
     s.img_w, s.img_h = w_or_err, h
+    s.band_y0 = nil -- CLI image is the whole doc, not a pixel band
     s.total_rows = doc_rows(s, cols)
     swap_in(s, png, cols, s.total_rows)
   end)
 end
 
---- Fast path: capture only the visible clip via the persistent sidecar. The
---- slice already IS the visible window, so there's no 297-row cap (any length
---- works) and scrolling just re-clips (~0.1s). `reload` rebuilds the page.
+--- Fast path: render a tall BAND (up to maxH px) around the cursor via the
+--- persistent sidecar, then scroll within it by moving the window. Only called
+--- to (re)render the band — on content change (`reload`) or when scrolling past
+--- the band edge — NOT on every scroll. A doc that fits in one band is rendered
+--- once and never again.
 local function refresh_sidecar(reload)
   local s = state
   if not s or not vim.api.nvim_win_is_valid(s.win) then
     return
   end
+  if s.band_pending and not reload then
+    return -- a band render is already in flight; don't pile on while scrolling
+  end
   local cols = math.min(kgp.MAX_CELLS, vim.api.nvim_win_get_width(s.win))
-  local winrows = vim.api.nvim_win_get_height(s.win)
   local cw, ch = config.opts.preview.cell_pixels[1], config.opts.preview.cell_pixels[2]
-  local clipH = winrows * ch
-  local clipY = 0
-  if s.doc_h and config.opts.preview.follow and vim.api.nvim_win_is_valid(s.src_win) then
-    local n = vim.api.nvim_buf_line_count(s.src_buf)
-    local cur = vim.api.nvim_win_get_cursor(s.src_win)[1]
-    local frac = math.min(1, math.max(0, (cur - 1) / math.max(1, n - 1)))
-    clipY = math.floor(frac * math.max(0, s.doc_h - clipH))
-  end
-  -- On a pure scroll (no reload), skip if the clip position is unchanged — no
-  -- point re-rendering and re-writing the same image to the tty.
-  if not reload and s.last_clipY == clipY and s.last_cols == cols and s.last_winrows == winrows then
-    return
-  end
+  local scale = config.opts.preview.scale
+  -- Band height is bounded by the 297-cell placeholder limit AND kitty's
+  -- ~10000px image cap (image px = bandH*scale). Kept moderate so the (rare)
+  -- band transmit stays small enough for tmux passthrough.
+  local maxH = math.min(kgp.MAX_CELLS * ch, math.floor(6000 / scale))
   if reload and not build_html(s.src_buf, s.html) then
     return
   end
   local out = s.tmpdir .. (s.id == ID_A and "/b.png" or "/a.png")
+  s.band_pending = true
   sidecar.render({
     html = s.html,
     reload = reload and true or false,
-    clipY = clipY,
-    clipH = clipH,
+    frac = scroll_frac(s),
+    maxH = maxH,
     width = cols * cw,
-    scale = config.opts.preview.scale,
+    scale = scale,
     out = out,
   }, function(r)
-    if not state or state ~= s or not r or not r.ok then
-      return -- leave the skip-cache untouched so a transient failure retries
+    if not state or state ~= s then
+      return
     end
-    -- Record the rendered position only after success, so a failed build/render
-    -- doesn't poison the cache and permanently skip repainting this clip.
-    s.last_clipY, s.last_cols, s.last_winrows = clipY, cols, winrows
+    s.band_pending = false
+    if not r or not r.ok then
+      return
+    end
     s.doc_h = r.docH
-    s.total_rows = winrows -- the slice fills the window; no scroll offset in paint
-    swap_in(s, out, cols, winrows)
+    s.band_y0 = r.bandY or 0
+    s.total_rows = math.max(1, math.floor((r.bandH or r.docH) / ch + 0.5))
+    swap_in(s, out, cols, s.total_rows)
   end)
 end
 
@@ -461,17 +484,30 @@ local function render_content()
   end
 end
 
---- Scroll / cursor moved → reposition (sidecar re-clips; CLI just re-paints).
+--- Scroll / cursor moved → reposition. If the target is inside the current band
+--- (or it's the CLI whole-doc image), just scroll the window (smooth, no tty
+--- write). Otherwise render a fresh band around the new position.
 local function redraw()
   local s = state
-  if not s then
+  if not s or not s.id then
     return
   end
-  if s.mode == "sidecar" then
-    refresh_sidecar(false)
-  else
-    paint()
+  if s.mode == "cli" then
+    scroll_view(s)
+    return
   end
+  if s.band_y0 ~= nil and s.doc_h then
+    local winrows = vim.api.nvim_win_get_height(s.win)
+    local ch = config.opts.preview.cell_pixels[2]
+    local target_y = scroll_frac(s) * math.max(0, s.doc_h - winrows * ch)
+    local want = math.floor((target_y - s.band_y0) / ch + 0.5)
+    scroll_view(s) -- always scroll (clamps into the band)
+    if want >= 0 and want + winrows <= (s.total_rows or 0) then
+      return -- inside the band — nothing more to do
+    end
+    -- scrolled past the band edge → render a fresh band around the new position
+  end
+  refresh_sidecar(false)
 end
 
 local pending = false
@@ -486,20 +522,6 @@ local function schedule_refresh()
   end, 120)
 end
 
--- Debounce scroll/cursor repositioning: while you scroll continuously, coalesce
--- to one re-clip after the view settles (~60ms) instead of a Chrome render per
--- step — the main "not smooth" cause.
-local redraw_pending = false
-local function schedule_redraw()
-  if redraw_pending then
-    return
-  end
-  redraw_pending = true
-  vim.defer_fn(function()
-    redraw_pending = false
-    redraw()
-  end, 60)
-end
 
 --- Whether the graphical preview can run here. Unlike inline images, the
 --- preview supports tmux as long as `allow-passthrough` is on (we try to enable
@@ -575,6 +597,8 @@ function M.open()
   vim.wo[win].wrap = false -- one buffer line == one screen row (placeholder grid)
   vim.wo[win].conceallevel = 0
   vim.wo[win].winhighlight = "Normal:Normal"
+  vim.wo[win].scrolloff = 0 -- so winrestview() can place the top line exactly
+  vim.wo[win].sidescrolloff = 0
   -- Fill with blank lines so no '~' end-of-buffer markers show under the image.
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(string.rep("\n", 400), "\n"))
 
@@ -616,7 +640,9 @@ function M.open()
   -- WinScrolled still keeps the preview in sync while typing pushes the view.
   vim.api.nvim_create_autocmd({ "CursorMoved", "WinScrolled" }, {
     group = group,
-    callback = schedule_redraw,
+    callback = function()
+      vim.schedule(redraw)
+    end,
   })
   vim.api.nvim_create_autocmd({ "VimResized", "WinResized" }, {
     group = group,
