@@ -26,7 +26,7 @@ M.defaults = {
     icons = { "󰲡 ", "󰲣 ", "󰲥 ", "󰲧 ", "󰲩 ", "󰲫 " },
     -- ASCII fallback.
     ascii = { "# ", "## ", "### ", "#### ", "##### ", "###### " },
-    -- Draw a GitHub-style full-width underline below headings up to this level.
+    -- Draw a full-width underline below headings up to this level.
     underline = 2,
   },
 
@@ -63,7 +63,7 @@ M.defaults = {
 
   table = { enabled = true },
 
-  -- Callouts / GitHub alerts: > [!NOTE], [!TIP], [!WARNING], …
+  -- Callouts / alerts: > [!NOTE], [!TIP], [!WARNING], …
   callout = {
     enabled = true,
     -- type -> { icon, hl, title }. Unlisted types fall back to "note".

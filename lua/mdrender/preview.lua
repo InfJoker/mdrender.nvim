@@ -46,7 +46,7 @@ local function load_assets()
   assets = {
     template = read("template.html"),
     css = read("preview.css"),
-    hlcss = read("highlight-github-dark.css"),
+    hlcss = read("highlight-dark.css"),
     marked = read("marked.min.js"),
     hljs = read("highlight.min.js"),
   }

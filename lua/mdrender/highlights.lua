@@ -37,7 +37,7 @@ M.groups = {
   MdRenderTableHead = { fg = "#7aa2f7", bold = true },
   MdRenderTableCell = { link = "Normal" },
 
-  -- Callouts / GitHub alerts (title + left bar, per type).
+  -- Callouts / alerts (title + left bar, per type).
   MdRenderCalloutNote = { fg = "#7aa2f7", bold = true },
   MdRenderCalloutTip = { fg = "#9ece6a", bold = true },
   MdRenderCalloutImportant = { fg = "#bb9af7", bold = true },
