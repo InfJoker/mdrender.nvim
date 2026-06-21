@@ -86,7 +86,9 @@ function startChrome() {
     const to = setTimeout(() => reject(new Error('chrome start timeout')), 15000);
     chrome.stderr.on('data', (d) => {
       buf += d;
-      const m = buf.match(/ws:\/\/[^\s]+/);
+      // Only match once the whole line has arrived, so a chunk boundary in the
+      // middle of the URL (e.g. mid-port) can't resolve a truncated URL.
+      const m = buf.match(/ws:\/\/\S+(?=\s)/);
       if (m) {
         clearTimeout(to);
         resolve(m[0]);

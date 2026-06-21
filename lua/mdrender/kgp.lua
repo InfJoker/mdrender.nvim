@@ -82,21 +82,36 @@ function M.cell(row, col)
 end
 
 --- One text row of placeholders for image-row `img_row`, columns 0..cols-1.
+--- Memoized: the same (img_row, cols) yields an identical string, and paint()
+--- rebuilds the whole grid on every scroll, so this avoids re-concatenating.
+local row_cache = {}
 function M.row_string(img_row, cols)
+  local key = img_row * 100000 + cols
+  local cached = row_cache[key]
+  if cached then
+    return cached
+  end
   PH = PH or M.utf8(M.PLACEHOLDER)
   local rd = diacritic(img_row)
   local parts = {}
   for c = 0, cols - 1 do
     parts[c + 1] = PH .. rd .. diacritic(c)
   end
-  return table.concat(parts)
+  local s = table.concat(parts)
+  row_cache[key] = s
+  return s
 end
 
 --- Ensure a highlight group exists whose fg encodes the 24-bit image id (kitty
 --- reads the cell foreground color as the image id). Returns the group name.
+--- Defined once per id (the content is constant), not on every paint.
+local hl_done = {}
 function M.id_highlight(id)
   local name = "MdRenderKGP" .. id
-  vim.api.nvim_set_hl(0, name, { fg = string.format("#%06x", id % 0x1000000), nocombine = true })
+  if not hl_done[id] then
+    vim.api.nvim_set_hl(0, name, { fg = string.format("#%06x", id % 0x1000000), nocombine = true })
+    hl_done[id] = true
+  end
   return name
 end
 

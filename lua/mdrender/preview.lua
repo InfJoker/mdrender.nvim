@@ -254,6 +254,13 @@ end
 
 local ns = vim.api.nvim_create_namespace("mdrender_preview")
 
+-- The two kitty image ids we double-buffer between. Derived from our pid so we
+-- don't clobber image ids another graphics plugin (or another nvim sharing this
+-- kitty window via tmux) is using; kept within 24 bits (the placeholder encodes
+-- the id in the cell foreground colour).
+local ID_A = 0x6d6400 + (vim.fn.getpid() % 0x600) * 2
+local ID_B = ID_A + 1
+
 --- Transmit a PNG and create a kitty virtual placement (Unicode placeholders),
 --- sized to cols x rows cells. Uses *direct* data transport (t=d), sending the
 --- base64 PNG bytes in 4 KiB chunks — file transport (t=f) fails to open the
@@ -361,7 +368,7 @@ end
 
 --- Swap a freshly-rendered PNG in: transmit it, repaint, delete the old image.
 local function swap_in(s, png, cols, rows)
-  local new_id = (s.id == 1) and 2 or 1
+  local new_id = (s.id == ID_A) and ID_B or ID_A
   if not kitty_transmit_virtual(new_id, png, cols, rows) then
     return
   end
@@ -420,11 +427,10 @@ local function refresh_sidecar(reload)
   if not reload and s.last_clipY == clipY and s.last_cols == cols and s.last_winrows == winrows then
     return
   end
-  s.last_clipY, s.last_cols, s.last_winrows = clipY, cols, winrows
   if reload and not build_html(s.src_buf, s.html) then
     return
   end
-  local out = s.tmpdir .. (s.id == 1 and "/b.png" or "/a.png")
+  local out = s.tmpdir .. (s.id == ID_A and "/b.png" or "/a.png")
   sidecar.render({
     html = s.html,
     reload = reload and true or false,
@@ -435,8 +441,11 @@ local function refresh_sidecar(reload)
     out = out,
   }, function(r)
     if not state or state ~= s or not r or not r.ok then
-      return
+      return -- leave the skip-cache untouched so a transient failure retries
     end
+    -- Record the rendered position only after success, so a failed build/render
+    -- doesn't poison the cache and permanently skip repainting this clip.
+    s.last_clipY, s.last_cols, s.last_winrows = clipY, cols, winrows
     s.doc_h = r.docH
     s.total_rows = winrows -- the slice fills the window; no scroll offset in paint
     swap_in(s, out, cols, winrows)
@@ -481,7 +490,11 @@ end
 --- preview supports tmux as long as `allow-passthrough` is on (we try to enable
 --- it). Returns ok, reason.
 local function preview_available()
-  local supported, term = gpu.detect()
+  -- Use the detection cached at setup() rather than re-probing on every open.
+  local supported, term = config.gpu, config.term
+  if supported == nil then
+    supported, term = gpu.detect()
+  end
   if not supported then
     return false, "not a kitty-graphics terminal (kitty/Ghostty/WezTerm)"
   end
@@ -627,8 +640,8 @@ function M.close()
   state = nil
   pcall(vim.api.nvim_del_augroup_by_id, s.group)
   if s.id then
-    kitty_delete(1)
-    kitty_delete(2)
+    kitty_delete(ID_A)
+    kitty_delete(ID_B)
   end
   sidecar.stop()
   if s.win and vim.api.nvim_win_is_valid(s.win) then

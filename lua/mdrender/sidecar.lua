@@ -25,6 +25,13 @@ local function send(req, cb)
   if not ok then
     S.inflight, S.cb = false, nil
     cb({ ok = false, err = "sidecar write failed" })
+    -- The pipe is dead; on_stdout will never run to drain a coalesced request,
+    -- so fail it here rather than leaving its callback hanging forever.
+    if S.next then
+      local n = S.next
+      S.next = nil
+      n.cb({ ok = false, err = "sidecar write failed" })
+    end
   end
 end
 
@@ -101,9 +108,14 @@ function M.start(chrome, on_ready)
       end
     end,
   }, vim.schedule_wrap(function()
-    -- node exited. If it never became ready, report failure so the caller
-    -- falls back to the CLI path instead of waiting forever.
+    -- node exited. If we never stopped it ourselves and it was serving renders,
+    -- that's an unexpected death — tell the user. If it never became ready,
+    -- report failure so the caller falls back to the CLI path.
+    local was_ready = S ~= nil and S.ready
     M.stop()
+    if was_ready then
+      vim.notify("[mdrender] preview renderer stopped; reopen the preview to restart it", vim.log.levels.WARN)
+    end
     settle(false, "sidecar exited before ready")
   end))
 end
@@ -131,12 +143,20 @@ function M.stop()
   end
   local s = S
   S = nil
-  -- SIGTERM (not SIGKILL) so node's handler tears down its chrome child first.
+  -- SIGTERM (not SIGKILL) so node's handler tears down its chrome child first,
+  -- then escalate to SIGKILL if it's still alive (handler wedged/ignored).
   pcall(function()
     if s.node then
       s.node:kill("sigterm")
     end
   end)
+  if s.node then
+    vim.defer_fn(function()
+      pcall(function()
+        s.node:kill("sigkill")
+      end)
+    end, 2000)
+  end
 end
 
 return M
