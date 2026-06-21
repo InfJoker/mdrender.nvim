@@ -63,7 +63,7 @@ M.defaults = {
 
   table = { enabled = true },
 
-  -- Obsidian-style callouts / GitHub alerts: > [!NOTE], [!TIP], [!WARNING], …
+  -- Callouts / GitHub alerts: > [!NOTE], [!TIP], [!WARNING], …
   callout = {
     enabled = true,
     -- type -> { icon, hl, title }. Unlisted types fall back to "note".
@@ -85,7 +85,7 @@ M.defaults = {
     },
   },
 
-  -- Graphical "Obsidian-style" preview: renders the buffer to an image with
+  -- Graphical preview: renders the buffer to an image with
   -- headless Chrome and shows it in a split via the kitty graphics protocol.
   preview = {
     chrome = nil, -- path to Chrome/Chromium; nil => autodetect

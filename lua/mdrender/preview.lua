@@ -1,7 +1,7 @@
---- Graphical "Obsidian-style" Markdown preview.
+--- Graphical Markdown preview.
 ---
 --- Renders the current buffer to a styled PNG with headless Chrome (HTML + an
---- Obsidian-like CSS theme, marked + highlight.js running client-side), then
+--- styled CSS theme, marked + highlight.js running client-side), then
 --- displays that image in a split window using the kitty graphics protocol.
 --- The image is cropped to the preview window and scrolls to follow the source
 --- window. Escape sequences are written straight to the controlling tty, the

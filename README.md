@@ -29,7 +29,7 @@ extmark engine.
 - **Horizontal rules** — drawn as a full-width line.
 - **Links & images** — URL hidden, text styled, with a leading icon.
 - **Anti-conceal** — the line under the cursor shows raw Markdown for editing.
-- **Graphical preview** — an optional Obsidian/GitHub-quality rendered page
+- **Graphical preview** — an optional browser-quality rendered page
   (real fonts, syntax highlighting, bordered tables) shown as an image in a
   split via headless Chrome + the kitty graphics protocol. See below.
 - **Inline images** (experimental) — local images rendered via the kitty
@@ -121,21 +121,21 @@ Override e.g. `MdRenderH1`, `MdRenderCode`, `MdRenderLink`, … to taste.
 :MdRender image     " render the image under the cursor (kitty protocol)
 ```
 
-## Graphical preview (Obsidian-style)
+## Graphical preview
 
 Two ways to view Markdown:
 
 1. **In-buffer decorations** (default) — the terminal-native styled view shown
    above, where you edit and read in the same buffer.
-2. **Graphical preview** — a true browser-quality rendered page (Obsidian/GitHub
-   look: real fonts, heading sizes, syntax-highlighted code, bordered tables,
-   styled callouts) shown as an *image* in a split, refreshing as you edit.
+2. **Graphical preview** — a true browser-quality rendered page (real fonts,
+   heading sizes, syntax-highlighted code, bordered tables, styled callouts)
+   shown as an *image* in a split, refreshing as you edit.
 
 ```vim
 :MdRender preview     " toggle the graphical preview split
 ```
 
-How it works: the buffer is rendered to HTML with an Obsidian-like CSS theme
+How it works: the buffer is rendered to HTML with a styled CSS theme
 (`marked` + `highlight.js` run client-side), captured with **headless Chrome**,
 and displayed in a split via the **kitty graphics protocol** (Unicode-placeholder
 placements, so the image is anchored to buffer cells and survives redraws / works

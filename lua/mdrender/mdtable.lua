@@ -1,4 +1,4 @@
---- Pipe-table rendering: parses GitHub/Obsidian Markdown tables and redraws
+--- Pipe-table rendering: parses GitHub-style Markdown tables and redraws
 --- them as aligned, box-drawn tables (┌─┬─┐ │ ├─┼─┤ └─┴─┘) using extmarks.
 ---
 --- Each source row is concealed and replaced by inline virtual text built from
