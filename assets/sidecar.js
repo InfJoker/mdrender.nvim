@@ -143,20 +143,28 @@ async function handle(req) {
   const cs = metrics.cssContentSize || metrics.contentSize;
   const docW = Math.ceil(cs.width);
   const docH = Math.ceil(cs.height);
-  const clip = {
-    x: 0,
-    y: Math.max(0, Math.min(req.clipY || 0, Math.max(0, docH - (req.clipH || docH)))),
-    width: req.width || docW,
-    height: req.clipH || docH,
-    scale: req.scale || 1,
-  };
+  // Render a BAND, not just the viewport: capture up to maxH px tall, centred on
+  // the cursor fraction. The editor then scrolls *within* this band by moving
+  // placeholders (no re-render), so scrolling is smooth. If the whole document
+  // fits in maxH, the band is the whole document and it's never re-rendered.
+  const maxH = req.maxH || docH;
+  let y, h;
+  if (docH <= maxH) {
+    y = 0;
+    h = docH;
+  } else {
+    h = maxH;
+    y = Math.round((req.frac || 0) * docH) - Math.floor(maxH / 2);
+    y = Math.max(0, Math.min(y, docH - h));
+  }
+  const clip = { x: 0, y: y, width: req.width || docW, height: h, scale: req.scale || 1 };
   const shot = await send('Page.captureScreenshot', {
     format: 'png',
     captureBeyondViewport: true,
     clip: clip,
   });
   fs.writeFileSync(req.out, Buffer.from(shot.data, 'base64'));
-  return { ok: true, out: req.out, docW: docW, docH: docH, clipY: clip.y };
+  return { ok: true, out: req.out, docW: docW, docH: docH, bandY: y, bandH: h };
 }
 
 process.on('SIGTERM', () => cleanup(0));

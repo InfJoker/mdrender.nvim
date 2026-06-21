@@ -1,10 +1,15 @@
 # mdrender.nvim
 
-In-buffer Markdown rendering for Neovim, tuned for **GPU-accelerated terminals**
-(kitty, Ghostty, WezTerm, iTerm2). It decorates Markdown live as you read —
-conceals the raw syntax, overlays Nerd-Font glyphs, and paints true-color
-highlights — and on terminals that speak the kitty graphics protocol it can draw
-real images inline.
+Markdown rendering for Neovim, tuned for **GPU-accelerated terminals**
+(kitty, Ghostty, WezTerm, iTerm2). It gives you two ways to view Markdown:
+
+1. **In-buffer decorations** — Markdown styled live as you read, in the same
+   buffer you edit: conceals raw syntax, overlays Nerd-Font glyphs, paints
+   true-color highlights, box-draws tables, and can draw images inline.
+2. **Graphical preview** — a true browser-quality rendered page (real fonts,
+   heading sizes, syntax-highlighted code, bordered tables, styled callouts)
+   shown as an image in a side split via headless Chrome + the kitty graphics
+   protocol. It refreshes as you edit and scrolls to follow your cursor.
 
 No treesitter dependency: the decorator is a self-contained, line-oriented
 extmark engine.
