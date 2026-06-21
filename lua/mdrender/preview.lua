@@ -366,26 +366,18 @@ end
 -- lifecycle
 ----------------------------------------------------------------------
 
---- Show a freshly-rendered PNG. Uses a SINGLE image id: re-transmitting replaces
---- the image behind the (unchanged) placeholder cells, so a plain scroll
---- re-render swaps only the image content — no buffer repaint, no old-image
---- delete. The placeholders are repainted only when the geometry changes (or in
---- CLI mode, which scrolls by re-painting at an offset). This removes the
---- per-scroll buffer churn that caused the flicker.
+--- Show a freshly-rendered PNG: transmit it to the *other* of our two image ids
+--- (always fresh, never the one currently on screen, so no re-transmit flash),
+--- then repaint the placeholders to point at it. The previous image is NOT
+--- deleted — only two ids ever alternate, each replaced (not deleted) when
+--- reused, and deleting an on-screen image during the swap flickers.
 local function swap_in(s, png, cols, rows)
-  local id = s.id or ID_A
-  if not kitty_transmit_virtual(id, png, cols, rows) then
+  local new_id = (s.id == ID_A) and ID_B or ID_A
+  if not kitty_transmit_virtual(new_id, png, cols, rows) then
     return
   end
-  local need_paint = s.id ~= id
-    or s.painted_cols ~= cols
-    or s.painted_rows ~= rows
-    or s.mode == "cli"
-  s.id = id
-  s.painted_cols, s.painted_rows = cols, rows
-  if need_paint then
-    paint()
-  end
+  s.id = new_id
+  paint()
 end
 
 --- CLI fallback: re-render the whole document with headless Chrome (two passes,
