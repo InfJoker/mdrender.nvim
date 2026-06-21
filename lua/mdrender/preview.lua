@@ -262,10 +262,15 @@ local ID_A = 0x6d6400 + (vim.fn.getpid() % 0x600) * 2
 local ID_B = ID_A + 1
 
 --- Transmit a PNG and create a kitty virtual placement (Unicode placeholders),
---- sized to cols x rows cells. Uses *direct* data transport (t=d), sending the
---- base64 PNG bytes in 4 KiB chunks — file transport (t=f) fails to open the
---- file across tmux/sandboxing (kitty returns EBADF), direct data always works.
-local function kitty_transmit_virtual(id, png, cols, rows)
+--- sized to cols x rows cells.
+---
+--- Transport: `t=d` streams the base64 PNG in 4 KiB chunks — fine in bare kitty,
+--- but in tmux every chunk is a separate passthrough sequence, so a big band is
+--- hundreds of round-trips (the 1-2s "disappear" on a band edge). `t=f` instead
+--- sends just the file *path* (one tiny escape) and kitty reads the PNG itself —
+--- near-instant, the right choice in tmux. Direct `t=d` stays the bare-kitty
+--- default since file transport has been flaky across some tmux/sandbox setups.
+local function kitty_transmit_direct(id, png, cols, rows)
   local f = io.open(png, "rb")
   if not f then
     return false
@@ -288,6 +293,16 @@ local function kitty_transmit_virtual(id, png, cols, rows)
     else
       emit(string.format("\27_Gm=%d;%s\27\\", more, chunk))
     end
+  end
+  return true
+end
+
+local function kitty_transmit_virtual(id, png, cols, rows)
+  if vim.env.TMUX then
+    -- file transport: one small escape, kitty reads the PNG off disk itself
+    emit(string.format("\27_Ga=t,f=100,t=f,i=%d,q=2;%s\27\\", id, vim.base64.encode(png)))
+  elseif not kitty_transmit_direct(id, png, cols, rows) then
+    return false
   end
   -- create the virtual placement that the placeholder cells reference
   emit(string.format("\27_Ga=p,U=1,i=%d,p=1,c=%d,r=%d,q=2\27\\", id, cols, rows))
@@ -444,9 +459,10 @@ local function refresh_sidecar(reload)
   local cw, ch = config.opts.preview.cell_pixels[1], config.opts.preview.cell_pixels[2]
   local scale = config.opts.preview.scale
   -- Band height is bounded by the 297-cell placeholder limit AND kitty's
-  -- ~10000px image cap (image px = bandH*scale). Kept moderate so the (rare)
-  -- band transmit stays small enough for tmux passthrough.
-  local maxH = math.min(kgp.MAX_CELLS * ch, math.floor(6000 / scale))
+  -- ~10000px image cap (image px = bandH*scale). With file transport the band
+  -- size barely affects transmit time, so make it as tall as those limits allow
+  -- (fewer band-edge re-renders while scrolling).
+  local maxH = math.min(kgp.MAX_CELLS * ch, math.floor(9000 / scale))
   if reload and not build_html(s.src_buf, s.html) then
     return
   end
