@@ -127,28 +127,41 @@ local function render_png(buf, width_px, cb)
   end
   local url = "file://" .. html
   local scale = config.opts.preview.scale
+  -- Shared flags tuned for a fast cold start. --allow-file-access-from-files lets
+  -- the page load local ![](images) referenced relative to the markdown file.
+  -- Note: --user-data-dir is intentionally NOT used. With a persistent profile
+  -- Chrome becomes a singleton that stays alive, so vim.system's stdout never
+  -- closes and the callback never fires.
+  local base = {
+    chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
+    "--no-first-run", "--no-default-browser-check", "--disable-extensions",
+    "--disable-background-networking", "--disable-sync", "--disable-default-apps",
+    "--mute-audio", "--disable-features=Translate,BackForwardCache",
+    "--allow-file-access-from-files", "--disable-dev-shm-usage",
+  }
+  local function run(extra, on_done)
+    local cmd = vim.list_extend(vim.deepcopy(base), extra)
+    vim.system(cmd, { text = true, timeout = 30000 }, vim.schedule_wrap(on_done))
+  end
   -- Pass 1: render and read back the document height from <body data-h>.
-  vim.system(
-    { chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=4000", "--dump-dom", url },
-    { text = true, timeout = 30000 },
-    vim.schedule_wrap(function(res)
-      local height = tonumber((res.stdout or ""):match('data%-h="(%d+)"')) or 1200
-      -- Pass 2: screenshot the full page at the requested width/height.
-      vim.system({
-        chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
-        "--force-device-scale-factor=" .. scale,
-        "--screenshot=" .. png,
-        "--window-size=" .. width_px .. "," .. height,
-        url,
-      }, { text = true, timeout = 30000 }, vim.schedule_wrap(function(res2)
-        if vim.fn.filereadable(png) == 1 then
-          cb(png, width_px * scale, height * scale)
-        else
-          cb(nil, "Chrome screenshot failed: " .. (res2.stderr or "?"))
-        end
-      end))
+  -- The page's inline script renders synchronously before load, so --dump-dom
+  -- already sees data-h — no virtual-time-budget needed.
+  run({ "--virtual-time-budget=400", "--dump-dom", url }, function(res)
+    local height = tonumber((res.stdout or ""):match('data%-h="(%d+)"')) or 1200
+    -- Pass 2: screenshot the full page at the requested width/height.
+    run({
+      "--force-device-scale-factor=" .. scale,
+      "--screenshot=" .. png,
+      "--window-size=" .. width_px .. "," .. height,
+      url,
+    }, function(res2)
+      if vim.fn.filereadable(png) == 1 then
+        cb(png, width_px * scale, height * scale)
+      else
+        cb(nil, "Chrome screenshot failed: " .. (res2.stderr or "?"))
+      end
     end)
-  )
+  end)
 end
 
 ----------------------------------------------------------------------
