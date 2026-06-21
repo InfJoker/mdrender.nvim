@@ -138,6 +138,10 @@ function M._command(args)
     M.disable()
   elseif sub == "image" then
     image_under_cursor()
+  elseif sub == "preview" then
+    require("mdrender.preview").toggle()
+  elseif sub == "install" then
+    require("mdrender.preview").install()
   elseif sub == "status" then
     local buf = vim.api.nvim_get_current_buf()
     vim.notify(string.format(

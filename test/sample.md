@@ -25,7 +25,7 @@ Visit the [Neovim website](https://neovim.io) and embed ![a picture](./pic.png).
 > Second quoted line with **emphasis**.
 
 > [!WARNING]
-> Callouts and GitHub alerts render with an icon and colored bar.
+> Callouts and alerts render with an icon and colored bar.
 
 ---
 

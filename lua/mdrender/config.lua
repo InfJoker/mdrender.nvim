@@ -26,7 +26,7 @@ M.defaults = {
     icons = { "󰲡 ", "󰲣 ", "󰲥 ", "󰲧 ", "󰲩 ", "󰲫 " },
     -- ASCII fallback.
     ascii = { "# ", "## ", "### ", "#### ", "##### ", "###### " },
-    -- Draw a GitHub-style full-width underline below headings up to this level.
+    -- Draw a full-width underline below headings up to this level.
     underline = 2,
   },
 
@@ -63,7 +63,7 @@ M.defaults = {
 
   table = { enabled = true },
 
-  -- Obsidian-style callouts / GitHub alerts: > [!NOTE], [!TIP], [!WARNING], …
+  -- Callouts / alerts: > [!NOTE], [!TIP], [!WARNING], …
   callout = {
     enabled = true,
     -- type -> { icon, hl, title }. Unlisted types fall back to "note".
@@ -83,6 +83,17 @@ M.defaults = {
       bug = { icon = "󰨰 ", hl = "MdRenderCalloutCaution", title = "Bug" },
       example = { icon = "󰉹 ", hl = "MdRenderCalloutImportant", title = "Example" },
     },
+  },
+
+  -- Graphical preview: renders the buffer to an image with
+  -- headless Chrome and shows it in a split via the kitty graphics protocol.
+  preview = {
+    chrome = nil, -- path to Chrome/Chromium; nil => autodetect
+    cell_pixels = { 8, 17 }, -- { width, height } per cell, for geometry/aspect
+    scale = 2, -- device scale factor (crisper text)
+    refresh = "save", -- "save" (BufWritePost) or "edit" (debounced TextChanged)
+    follow = true, -- scroll the preview to follow the source window
+    split = "vertical", -- "vertical" | "horizontal"
   },
 
   -- Inline image rendering via the kitty graphics protocol. Experimental and

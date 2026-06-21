@@ -20,7 +20,7 @@ end, {
   complete = function(arglead)
     return vim.tbl_filter(function(c)
       return c:find(arglead, 1, true) == 1
-    end, { "toggle", "enable", "disable", "status", "image" })
+    end, { "toggle", "enable", "disable", "status", "image", "preview", "install" })
   end,
   desc = "Control mdrender markdown decorations",
 })

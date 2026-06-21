@@ -1,4 +1,4 @@
---- Pipe-table rendering: parses GitHub/Obsidian Markdown tables and redraws
+--- Pipe-table rendering: parses Markdown pipe tables and redraws
 --- them as aligned, box-drawn tables (┌─┬─┐ │ ├─┼─┤ └─┴─┘) using extmarks.
 ---
 --- Each source row is concealed and replaced by inline virtual text built from
@@ -8,12 +8,26 @@ local M = {}
 
 local dw = vim.fn.strdisplaywidth
 
---- Split a table row into trimmed cell strings (outer pipes dropped).
+--- Split a table row into trimmed cell strings, dropping the outer border pipes
+--- but PRESERVING empty interior cells, and treating `\|` as a literal pipe.
 local function split_cells(line)
-  local cells = {}
-  for cell in line:gmatch("[^|]+") do
-    cells[#cells + 1] = vim.trim(cell)
+  local s = line:gsub("^%s*|", ""):gsub("|%s*$", "") -- drop outer border pipes
+  local cells, cur, i = {}, {}, 1
+  while i <= #s do
+    local ch = s:sub(i, i)
+    if ch == "\\" and s:sub(i + 1, i + 1) == "|" then
+      cur[#cur + 1] = "|"
+      i = i + 2
+    elseif ch == "|" then
+      cells[#cells + 1] = vim.trim(table.concat(cur))
+      cur = {}
+      i = i + 1
+    else
+      cur[#cur + 1] = ch
+      i = i + 1
+    end
   end
+  cells[#cells + 1] = vim.trim(table.concat(cur))
   return cells
 end
 
@@ -44,7 +58,6 @@ function M.scan(lines, code_set)
     if not code_set[i - 1] and header:find("|") and sep and is_separator(sep) and not header:match("^%s*$") then
       local hcells = split_cells(header)
       local aligns = alignments(sep)
-      local ncols = math.max(#hcells, #aligns)
       -- gather body rows
       local last = i + 1 -- separator row index (1-based)
       local j = i + 2
@@ -52,13 +65,22 @@ function M.scan(lines, code_set)
         last = j
         j = j + 1
       end
+      local body = {}
+      for r = i + 2, last do
+        body[#body + 1] = split_cells(lines[r])
+      end
+      -- ncols spans the widest of header, separator, AND any body row, so a body
+      -- row with extra columns isn't silently truncated.
+      local ncols = math.max(#hcells, #aligns)
+      for _, cells in ipairs(body) do
+        ncols = math.max(ncols, #cells)
+      end
       -- column widths across header + body
       local colw = {}
       for c = 1, ncols do
         colw[c] = math.max(3, dw(hcells[c] or ""))
       end
-      for r = i + 2, last do
-        local cells = split_cells(lines[r])
+      for _, cells in ipairs(body) do
         for c = 1, ncols do
           colw[c] = math.max(colw[c], dw(cells[c] or ""))
         end
@@ -127,14 +149,18 @@ function M.render(set, region, lines, reveal_row)
   set(region.header, 0, { virt_lines = { border(region, "┌", "┬", "┐") }, virt_lines_above = true })
   -- header row
   draw(region.header, row_chunks(region, split_cells(lines[region.header + 1]), true))
-  -- separator row -> middle border
-  draw(region.sep, border(region, "├", "┼", "┤"))
-  -- body rows
-  for row = region.sep + 1, region.last do
-    draw(row, row_chunks(region, split_cells(lines[row + 1]), false))
+  -- separator row -> middle border, or the bottom border if there's no body
+  -- (a header-only table would otherwise draw two stacked borders).
+  local no_body = region.last == region.sep
+  if no_body then
+    draw(region.sep, border(region, "└", "┴", "┘"))
+  else
+    draw(region.sep, border(region, "├", "┼", "┤"))
+    for row = region.sep + 1, region.last do
+      draw(row, row_chunks(region, split_cells(lines[row + 1]), false))
+    end
+    set(region.last, 0, { virt_lines = { border(region, "└", "┴", "┘") } })
   end
-  -- bottom border below the last row
-  set(region.last, 0, { virt_lines = { border(region, "└", "┴", "┘") } })
 end
 
 return M

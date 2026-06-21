@@ -16,25 +16,28 @@ extmark engine.
 ## Features
 
 - **Headings** — `#`…`######` concealed, per-level glyph + colored line, with a
-  GitHub-style underline rule below H1/H2.
+  a full-width underline rule below H1/H2.
 - **Emphasis** — `**bold**`, `*italic*`, `***bold italic***`, `~~strikethrough~~`.
 - **Inline code** & **fenced code blocks** — backgrounded, with a language label.
 - **Lists** — bullets become `● ○ ◆ ◇` by depth; ordered numbers colored.
 - **Task lists** — `- [ ]` / `- [x]` become checkbox glyphs; done items dimmed.
 - **Tables** — redrawn as proper box-drawn, column-aligned tables
   (`┌─┬─┐ │ ├─┼─┤ └─┴─┘`) honoring `:--`/`--:`/`:-:` alignment.
-- **Callouts / GitHub alerts** — `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`,
+- **Callouts / alerts** — `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`,
   `[!WARNING]`, `[!CAUTION]` (and aliases) get an icon, colored title and bar.
 - **Blockquotes** — a colored bar replaces `>`.
 - **Horizontal rules** — drawn as a full-width line.
 - **Links & images** — URL hidden, text styled, with a leading icon.
 - **Anti-conceal** — the line under the cursor shows raw Markdown for editing.
+- **Graphical preview** — an optional browser-quality rendered page
+  (real fonts, syntax highlighting, bordered tables) shown as an image in a
+  split via headless Chrome + the kitty graphics protocol. See below.
 - **Inline images** (experimental) — local images rendered via the kitty
   graphics protocol on supported terminals.
 
 ![tables and callouts](test/render_tables.png)
 
-*Box-drawn tables with column alignment, plus callouts / GitHub alerts.*
+*Box-drawn tables with column alignment, plus callouts / alerts.*
 
 ## Requirements
 
@@ -48,6 +51,11 @@ extmark engine.
 
 ## Install
 
+Everything the plugin needs at runtime ships in the repo — the Lua modules and
+all preview assets (the Markdown renderer, syntax highlighter, themes, HTML
+template and the render sidecar). Nothing is fetched on the side for the
+**in-buffer view**.
+
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
@@ -55,13 +63,17 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
   "InfJoker/mdrender.nvim",
   ft = "markdown",
   opts = {}, -- lazy calls require("mdrender").setup(opts) for you
+  -- Optional: only for the graphical preview. Fetches the fast headless
+  -- renderer (chrome-headless-shell). Needs Node's npx. Omit if you only want
+  -- the in-buffer view; or run :MdRender install from inside nvim any time.
+  build = "npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer",
 }
 ```
 
 With [packer](https://github.com/wbthomason/packer.nvim):
 
 ```lua
-use({ "InfJoker/mdrender.nvim" })
+use({ "InfJoker/mdrender.nvim" }) -- then run :MdRender install once for the preview
 ```
 
 With [vim-plug](https://github.com/junegunn/vim-plug):
@@ -71,8 +83,14 @@ Plug 'InfJoker/mdrender.nvim'
 ```
 
 Calling `setup()` is **optional** — the plugin auto-activates on Markdown
-buffers with sensible defaults. Pass `opts`/`setup({...})` only to override
-them.
+buffers with sensible defaults.
+
+### What needs what
+
+| Feature | Requirements |
+|---|---|
+| **In-buffer rendering** (`:MdRender toggle`) | nothing — pure Lua, works everywhere (Nerd Font for icons) |
+| **Graphical preview** (`:MdRender preview`) | a kitty-graphics terminal + a headless Chrome (`:MdRender install` fetches the fast `chrome-headless-shell`) + Node.js for the warm renderer (optional; falls back without it) |
 
 ## Configuration
 
@@ -116,6 +134,69 @@ Override e.g. `MdRenderH1`, `MdRenderCode`, `MdRenderLink`, … to taste.
 :MdRender disable
 :MdRender status    " show attach / gpu / terminal / image state
 :MdRender image     " render the image under the cursor (kitty protocol)
+```
+
+## Graphical preview
+
+Two ways to view Markdown:
+
+1. **In-buffer decorations** (default) — the terminal-native styled view shown
+   above, where you edit and read in the same buffer.
+2. **Graphical preview** — a true browser-quality rendered page (real fonts,
+   heading sizes, syntax-highlighted code, bordered tables, styled callouts)
+   shown as an *image* in a split, refreshing as you edit.
+
+```vim
+:MdRender preview     " toggle the graphical preview split
+```
+
+How it works: the buffer is rendered to HTML with a styled CSS theme
+(`marked` + `highlight.js` run client-side), captured with **headless Chrome**,
+and displayed in a split via the **kitty graphics protocol** (Unicode-placeholder
+placements, so the image is anchored to buffer cells and survives redraws / works
+under tmux passthrough). The preview **scrolls to mirror your cursor position**
+in the source window, and refreshes on save (or on every edit with
+`preview.refresh = "edit"`).
+
+For speed it keeps a **persistent renderer warm** (a `chrome-headless-shell`
+driven over the DevTools protocol by a tiny Node sidecar — no npm dependencies,
+uses Node's built-in WebSocket). Each refresh captures just the **visible slice**,
+so renders are ~0.1–0.3s, scrolling is smooth, and **documents of any length**
+render at full quality (no row cap). If Node isn't available it falls back to a
+slower per-refresh `chrome-headless-shell`/Chrome invocation (which caps very
+long docs).
+
+Requirements:
+
+- A **kitty-graphics terminal** (kitty / Ghostty / WezTerm).
+- A headless Chrome to render the page. For the **fastest refresh (~0.5s vs
+  ~4s)**, install the lightweight `chrome-headless-shell` — it's auto-detected
+  and preferred:
+
+  ```bash
+  npx @puppeteer/browsers install chrome-headless-shell@stable
+  ```
+
+  Otherwise the plugin falls back to full **Google Chrome / Chromium** on
+  `PATH` (slower cold start). Override with `preview.chrome`.
+- **Node.js** (optional but recommended): enables the persistent warm renderer
+  (~0.1–0.3s refresh, smooth scroll, any document length). Without it, rendering
+  still works but is slower per refresh and caps very long docs.
+- **Inside tmux:** add `set -g allow-passthrough all` to your tmux config (must
+  be `all`, not `on` — Neovim runs in the alternate screen). With that, the
+  preview works inside tmux too.
+
+Config (defaults):
+
+```lua
+preview = {
+  chrome = nil,             -- path to Chrome/Chromium; nil => autodetect
+  cell_pixels = { 8, 17 },  -- terminal cell { width, height } px (geometry/aspect)
+  scale = 2,                -- device scale factor (crisper text)
+  refresh = "save",         -- "save" (BufWritePost) | "edit" (debounced)
+  follow = true,            -- scroll preview to follow the source window
+  split = "vertical",       -- "vertical" | "horizontal"
+}
 ```
 
 ## Inline images (experimental)

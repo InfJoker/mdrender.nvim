@@ -259,7 +259,7 @@ local function decorate_line(set, row, line, ctx)
           virt_text = { { icons[level], "MdRenderH" .. level } },
           virt_text_pos = "inline",
         })
-        -- GitHub-style underline rule below H1/H2.
+        -- full-width underline rule below H1/H2.
         if level <= (o.heading.underline or 0) then
           set(row, 0, {
             virt_lines = { { { string.rep("─", ctx.width), "MdRenderRule" } } },
