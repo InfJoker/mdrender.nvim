@@ -416,6 +416,16 @@ local function swap_in(s, png, cols, rows)
   s.id = new_id
   paint_band(s)
   scroll_view(s)
+  -- On the first render the placeholders can be drawn before kitty has finished
+  -- loading the (file-transport) image and before the just-opened window's view
+  -- settles — which shows blank until a scroll. Re-apply the view and force a
+  -- repaint a beat later so it displays without needing a scroll.
+  vim.defer_fn(function()
+    if state == s and vim.api.nvim_win_is_valid(s.win) then
+      scroll_view(s)
+      pcall(vim.cmd, "redraw")
+    end
+  end, 40)
 end
 
 --- CLI fallback: re-render the whole document with headless Chrome (two passes,
