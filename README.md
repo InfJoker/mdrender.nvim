@@ -146,8 +146,16 @@ save (or on every edit with `preview.refresh = "edit"`).
 Requirements:
 
 - A **kitty-graphics terminal** (kitty / Ghostty / WezTerm).
-- **Google Chrome / Chromium** on `PATH` (auto-detected; or set
-  `preview.chrome`).
+- A headless Chrome to render the page. For the **fastest refresh (~0.5s vs
+  ~4s)**, install the lightweight `chrome-headless-shell` — it's auto-detected
+  and preferred:
+
+  ```bash
+  npx @puppeteer/browsers install chrome-headless-shell@stable
+  ```
+
+  Otherwise the plugin falls back to full **Google Chrome / Chromium** on
+  `PATH` (slower cold start). Override with `preview.chrome`.
 - **Inside tmux:** add `set -g allow-passthrough all` to your tmux config (must
   be `all`, not `on` — Neovim runs in the alternate screen). With that, the
   preview works inside tmux too.

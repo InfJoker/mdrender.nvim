@@ -52,11 +52,34 @@ local function load_assets()
   return assets
 end
 
---- Locate a Chrome/Chromium binary.
+--- Find an installed chrome-headless-shell (a lightweight headless Chrome that
+--- cold-starts in ~0.25s vs ~2s for full Chrome). Installed via:
+---   npx @puppeteer/browsers install chrome-headless-shell@stable
+local function find_headless_shell()
+  for _, root in ipairs({ "~/chrome-headless-shell", "~/.cache/puppeteer/chrome-headless-shell" }) do
+    local hits = vim.fn.glob(vim.fn.expand(root) .. "/*/chrome-headless-shell-*/chrome-headless-shell", true, true)
+    if hits[1] and vim.fn.executable(hits[1]) == 1 then
+      return hits[1]
+    end
+  end
+  return nil
+end
+
+--- Whether the resolved chrome binary is the fast headless-shell.
+local using_shell = false
+
+--- Locate a Chrome binary. Prefers chrome-headless-shell (much faster), then
+--- full Chrome/Chromium as a (slower) fallback.
 local function find_chrome()
   if config.opts.preview.chrome then
     return config.opts.preview.chrome
   end
+  local shell = find_headless_shell()
+  if shell then
+    using_shell = true
+    return shell
+  end
+  using_shell = false
   local candidates = {
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -416,6 +439,24 @@ function M.open()
   if not load_assets() then
     vim.notify("[mdrender] preview assets not found on runtimepath", vim.log.levels.ERROR)
     return
+  end
+
+  -- Warm the renderer so the first refresh isn't slowed by Chrome's cold start.
+  -- Also nudge the user toward chrome-headless-shell if we fell back to full
+  -- Chrome (≈9x slower per render).
+  local chrome = find_chrome()
+  if chrome then
+    pcall(vim.system, { chrome, "--headless=new", "--dump-dom", "about:blank" }, {})
+    if not using_shell and not vim.g._mdrender_shell_hint then
+      vim.g._mdrender_shell_hint = true
+      vim.schedule(function()
+        vim.notify(
+          "[mdrender] preview uses full Chrome (~4s/refresh). For ~0.5s, install the lightweight shell:\n"
+            .. "  npx @puppeteer/browsers install chrome-headless-shell@stable",
+          vim.log.levels.INFO
+        )
+      end)
+    end
   end
 
   local src_buf = vim.api.nvim_get_current_buf()
