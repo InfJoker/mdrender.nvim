@@ -190,6 +190,7 @@ Config (defaults):
 
 ```lua
 preview = {
+  auto = false,             -- auto-open the preview for markdown files
   chrome = nil,             -- path to Chrome/Chromium; nil => autodetect
   cell_pixels = { 8, 17 },  -- terminal cell { width, height } px (geometry/aspect)
   scale = 2,                -- device scale factor (crisper text)
@@ -198,6 +199,13 @@ preview = {
   split = "vertical",       -- "vertical" | "horizontal"
 }
 ```
+
+With `preview.auto = true`, the graphical preview opens automatically when you
+open a markdown file and **re-targets to whichever markdown buffer you focus**
+(one preview at a time). It stays out of your buffer list / bufferline (scratch,
+unlisted), only re-targets within the same tab (it won't hijack a preview in
+another tab), and skips non-markdown buffers, floating windows, and terminals.
+If the terminal can't show a preview it's silently skipped.
 
 ## Inline images (experimental)
 

@@ -88,6 +88,7 @@ M.defaults = {
   -- Graphical preview: renders the buffer to an image with
   -- headless Chrome and shows it in a split via the kitty graphics protocol.
   preview = {
+    auto = false, -- auto-open the preview when a markdown file is opened
     chrome = nil, -- path to Chrome/Chromium; nil => autodetect
     cell_pixels = { 8, 17 }, -- { width, height } per cell, for geometry/aspect
     scale = 2, -- device scale factor (crisper text)

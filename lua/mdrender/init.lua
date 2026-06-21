@@ -77,6 +77,20 @@ function M.setup(opts)
     end
   end
 
+  -- preview.auto: open/re-target the graphical preview as you move between
+  -- markdown buffers. The handler itself no-ops unless preview.auto is set and
+  -- guards against splits/floats/tabs/the preview's own buffer.
+  vim.api.nvim_create_autocmd({ "BufWinEnter", "BufEnter" }, {
+    group = vim.api.nvim_create_augroup("MdRenderAutoPreview", { clear = true }),
+    callback = function()
+      if config.opts.preview.auto then
+        vim.schedule(function()
+          pcall(require("mdrender.preview").auto_focus)
+        end)
+      end
+    end,
+  })
+
   M._configured = true
 
   -- Attach to any markdown buffers already open (e.g. after a lazy setup).
@@ -84,6 +98,14 @@ function M.setup(opts)
     if vim.api.nvim_buf_is_loaded(buf) then
       M._on_filetype(buf)
     end
+  end
+
+  -- The buffer that triggered this setup() (lazy ft-load) already fired its
+  -- BufWinEnter before our autocmd existed — kick the auto-preview for it.
+  if config.opts.preview.auto then
+    vim.schedule(function()
+      pcall(require("mdrender.preview").auto_focus)
+    end)
   end
 end
 

@@ -585,10 +585,15 @@ function M.open()
   local refresh_evt = config.opts.preview.refresh == "edit"
       and { "TextChanged", "TextChangedI" }
     or { "BufWritePost" }
+  -- Filter on the live source buffer rather than binding to a fixed one, so the
+  -- preview can be re-targeted to another markdown buffer (see M.retarget).
   vim.api.nvim_create_autocmd(refresh_evt, {
     group = group,
-    buffer = src_buf,
-    callback = schedule_refresh,
+    callback = function(ev)
+      if state and ev.buf == state.src_buf then
+        schedule_refresh()
+      end
+    end,
   })
   -- Reposition on scroll/cursor moves. CursorMovedI (every keystroke in insert
   -- mode) is deliberately excluded: re-rendering + writing graphics to the tty
@@ -666,6 +671,70 @@ end
 
 function M.is_open()
   return state ~= nil
+end
+
+--- Re-point an open preview at a different markdown buffer/window and re-render.
+function M.retarget(buf, win)
+  if not state or state.src_buf == buf then
+    return
+  end
+  state.src_buf = buf
+  state.src_win = win
+  state.doc_h = nil
+  state.last_clipY, state.last_cols, state.last_winrows = nil, nil, nil
+  render_content() -- reload: rebuild HTML for the new buffer
+end
+
+--- Is `win` a normal (non-floating) window showing a real markdown FILE buffer?
+local function is_md_source(win, buf)
+  if not vim.api.nvim_win_is_valid(win) then
+    return false
+  end
+  if vim.api.nvim_win_get_config(win).relative ~= "" then
+    return false -- floating window
+  end
+  if state and (win == state.win or buf == state.buf) then
+    return false -- the preview's own window/buffer
+  end
+  if vim.bo[buf].buftype ~= "" then
+    return false -- nofile / help / terminal / quickfix etc.
+  end
+  local ft = vim.bo[buf].filetype
+  for _, f in ipairs(config.opts.filetypes) do
+    if ft == f then
+      return true
+    end
+  end
+  return false
+end
+
+--- preview.auto entry point: on entering a markdown buffer, open the preview
+--- for it, or re-target an already-open preview. No-ops unless preview.auto is
+--- set, and stays silent when the terminal can't show a preview.
+function M.auto_focus()
+  if not config.opts.preview.auto then
+    return
+  end
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_win_get_buf(win)
+  if not is_md_source(win, buf) then
+    return
+  end
+  if state then
+    -- A preview is already open. Re-target it only if it lives in this tabpage,
+    -- so we don't hijack a preview shown in another tab.
+    if vim.api.nvim_win_is_valid(state.win)
+      and vim.api.nvim_win_get_tabpage(state.win) == vim.api.nvim_win_get_tabpage(win)
+    then
+      M.retarget(buf, win)
+    end
+    return
+  end
+  -- No preview yet: open one, but only where it's actually supported (skip
+  -- silently otherwise — don't error on every markdown file).
+  if preview_available() then
+    M.open()
+  end
 end
 
 --- Where chrome-headless-shell is installed (a path find_headless_shell() globs).
