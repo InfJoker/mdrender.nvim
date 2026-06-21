@@ -57,8 +57,11 @@ end
 --- cold-starts in ~0.25s vs ~2s for full Chrome). Installed via:
 ---   npx @puppeteer/browsers install chrome-headless-shell@stable
 local function find_headless_shell()
-  for _, root in ipairs({ "~/chrome-headless-shell", "~/.cache/puppeteer/chrome-headless-shell" }) do
-    local hits = vim.fn.glob(vim.fn.expand(root) .. "/*/chrome-headless-shell-*/chrome-headless-shell", true, true)
+  -- @puppeteer/browsers nests it differently depending on the --path used
+  -- (e.g. ~/chrome-headless-shell/<ver>/... vs
+  -- ~/.cache/puppeteer/chrome-headless-shell/<ver>/...), so glob recursively.
+  for _, root in ipairs({ "~/.cache/puppeteer", "~/chrome-headless-shell" }) do
+    local hits = vim.fn.glob(vim.fn.expand(root) .. "/**/chrome-headless-shell-*/chrome-headless-shell", true, true)
     if hits[1] and vim.fn.executable(hits[1]) == 1 then
       return hits[1]
     end

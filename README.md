@@ -51,6 +51,11 @@ extmark engine.
 
 ## Install
 
+Everything the plugin needs at runtime ships in the repo — the Lua modules and
+all preview assets (the Markdown renderer, syntax highlighter, themes, HTML
+template and the render sidecar). Nothing is fetched on the side for the
+**in-buffer view**.
+
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
@@ -58,13 +63,17 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
   "InfJoker/mdrender.nvim",
   ft = "markdown",
   opts = {}, -- lazy calls require("mdrender").setup(opts) for you
+  -- Optional: only for the graphical preview. Fetches the fast headless
+  -- renderer (chrome-headless-shell). Needs Node's npx. Omit if you only want
+  -- the in-buffer view; or run :MdRender install from inside nvim any time.
+  build = "npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer",
 }
 ```
 
 With [packer](https://github.com/wbthomason/packer.nvim):
 
 ```lua
-use({ "InfJoker/mdrender.nvim" })
+use({ "InfJoker/mdrender.nvim" }) -- then run :MdRender install once for the preview
 ```
 
 With [vim-plug](https://github.com/junegunn/vim-plug):
@@ -74,8 +83,14 @@ Plug 'InfJoker/mdrender.nvim'
 ```
 
 Calling `setup()` is **optional** — the plugin auto-activates on Markdown
-buffers with sensible defaults. Pass `opts`/`setup({...})` only to override
-them.
+buffers with sensible defaults.
+
+### What needs what
+
+| Feature | Requirements |
+|---|---|
+| **In-buffer rendering** (`:MdRender toggle`) | nothing — pure Lua, works everywhere (Nerd Font for icons) |
+| **Graphical preview** (`:MdRender preview`) | a kitty-graphics terminal + a headless Chrome (`:MdRender install` fetches the fast `chrome-headless-shell`) + Node.js for the warm renderer (optional; falls back without it) |
 
 ## Configuration
 
