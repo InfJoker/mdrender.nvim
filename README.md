@@ -69,8 +69,8 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
   ft = "markdown",
   opts = {}, -- lazy calls require("mdrender").setup(opts) for you
   -- Optional: only for the graphical preview. Fetches the fast headless
-  -- renderer (chrome-headless-shell). Needs Node's npx. Omit if you only want
-  -- the in-buffer view; or run :MdRender install from inside nvim any time.
+  -- renderer (chrome-headless-shell). Needs Node >= 18 (for @puppeteer/browsers).
+  -- Omit if you only want the in-buffer view; or run :MdRender install any time.
   build = "npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer",
 }
 ```
@@ -95,7 +95,7 @@ buffers with sensible defaults.
 | Feature | Requirements |
 |---|---|
 | **In-buffer rendering** (`:MdRender toggle`) | nothing — pure Lua, works everywhere (Nerd Font for icons) |
-| **Graphical preview** (`:MdRender preview`) | a kitty-graphics terminal + a headless Chrome (`:MdRender install` fetches the fast `chrome-headless-shell`) + Node.js for the warm renderer (optional; falls back without it) |
+| **Graphical preview** (`:MdRender preview`) | a kitty-graphics terminal + a headless Chrome (`:MdRender install` fetches the fast `chrome-headless-shell`, which needs **Node ≥ 18**) + Node.js for the warm renderer (optional; falls back without it) |
 
 ## Configuration
 
@@ -184,9 +184,12 @@ Requirements:
 
   Otherwise the plugin falls back to full **Google Chrome / Chromium** on
   `PATH` (slower cold start). Override with `preview.chrome`.
-- **Node.js** (optional but recommended): enables the persistent warm renderer
-  (~0.1–0.3s refresh, smooth scroll, any document length). Without it, rendering
-  still works but is slower per refresh and caps very long docs.
+- **Node.js ≥ 18** (optional but recommended): enables the persistent warm
+  renderer (~0.1–0.3s refresh, smooth scroll, any document length) and is the
+  minimum required by `@puppeteer/browsers` for `:MdRender install` / the `build`
+  step. Without Node, rendering still works but is slower per refresh and caps
+  very long docs. (Some distros ship an old default `node`, e.g. Ubuntu 20.04's
+  apt `nodejs` is v10 — upgrade via nvm or nodesource if `install` complains.)
 - **Inside tmux:** add `set -g allow-passthrough all` to your tmux config (must
   be `all`, not `on` — Neovim runs in the alternate screen). With that, the
   preview works inside tmux too.
@@ -218,8 +221,8 @@ Set `images.enabled = true`. On a kitty-protocol terminal each
 `![alt](./local.png)` is drawn below its line using Unicode-placeholder
 placements that scroll with the buffer. Notes:
 
-- Requires kitty / Ghostty / WezTerm. **Disabled inside tmux/screen** unless you
-  have graphics passthrough configured (multiplexers swallow the escape codes).
+- Requires kitty / Ghostty / WezTerm. Inside tmux, add `set -g allow-passthrough
+  all` (must be `all`, not `on`) — with that, inline images work in tmux too.
 - Remote `http(s)://` images are skipped.
 - Non-PNG formats need ImageMagick on `PATH`.
 

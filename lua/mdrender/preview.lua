@@ -12,6 +12,7 @@
 local config = require("mdrender.config")
 local gpu = require("mdrender.gpu")
 local kgp = require("mdrender.kgp")
+local term = require("mdrender.term")
 local sidecar = require("mdrender.sidecar")
 
 local M = {}
@@ -192,65 +193,11 @@ local function render_png(buf, width_px, cb)
 end
 
 ----------------------------------------------------------------------
--- kitty graphics output (via Neovim's own UI output stream)
+-- kitty graphics output (shared term module: t=d transport, tmux wrap, tty)
 ----------------------------------------------------------------------
 
---- Wrap a kitty graphics APC in the tmux passthrough envelope so tmux forwards
---- it to the outer terminal: \ePtmux; <esc-doubled seq> \e\\
-local function tmux_wrap(seq)
-  return "\27Ptmux;" .. seq:gsub("\27", "\27\27") .. "\27\\"
-end
-
---- Write raw bytes to the terminal. Plain io.stdout (C stdio) races Neovim's
---- libuv TUI writes on fd 1 and the sequence gets split/clobbered (flaky or
---- blank). Instead write through a libuv TTY handle on fd 1 — the same queue
---- Neovim's UI uses — so the bytes are ordered cleanly. Prefer nvim_ui_send
---- (0.11+) when available; it's the official channel.
---- Resolve the real terminal device path (e.g. /dev/ttys008). The generic
---- /dev/tty alias fails to open when Neovim has no controlling terminal (e.g.
---- launched via `open`/launchd), but the concrete device — reported by `tty`,
---- whose stdin Neovim inherits — opens fine. This is how image.nvim does it.
-local function tty_path()
-  local p = io.popen("tty 2>/dev/null")
-  if not p then
-    return nil
-  end
-  local t = (p:read("*a") or ""):gsub("%s+$", "")
-  p:close()
-  return t:match("^/dev/") and t or nil
-end
-
-local tty_handle = nil
-local function term_write(seq)
-  if vim.api.nvim_ui_send then
-    vim.api.nvim_ui_send(seq)
-    return
-  end
-  -- Write to the tty device (a separate fd from Neovim's fd-1 TUI writes), each
-  -- complete escape sequence in one flushed write so the TUI can't split it.
-  if tty_handle == nil then
-    tty_handle = io.open(tty_path() or "/dev/tty", "w") or false
-  end
-  if tty_handle then
-    tty_handle:write(seq)
-    tty_handle:flush()
-  else
-    io.stdout:write(seq)
-    io.stdout:flush()
-  end
-end
-
-local function emit(seq)
-  -- Only the graphics APC (\e_G...) needs passthrough; cursor moves go to tmux.
-  if vim.env.TMUX and seq:sub(1, 2) == "\27_" then
-    seq = tmux_wrap(seq)
-  end
-  if M._capture then
-    M._capture[#M._capture + 1] = seq
-    return
-  end
-  term_write(seq)
-end
+local kitty_transmit_virtual = term.transmit_virtual
+local kitty_delete = term.delete
 
 local ns = vim.api.nvim_create_namespace("mdrender_preview")
 
@@ -260,44 +207,6 @@ local ns = vim.api.nvim_create_namespace("mdrender_preview")
 -- the id in the cell foreground colour).
 local ID_A = 0x6d6400 + (vim.fn.getpid() % 0x600) * 2
 local ID_B = ID_A + 1
-
---- Transmit a PNG and create a kitty virtual placement (Unicode placeholders),
---- sized to cols x rows cells. Uses *direct* data transport (t=d), sending the
---- base64 PNG bytes in 4 KiB chunks — file transport (t=f) fails to open the
---- file across tmux/sandboxing (kitty returns EBADF), direct data always works.
-local function kitty_transmit_virtual(id, png, cols, rows)
-  local f = io.open(png, "rb")
-  if not f then
-    return false
-  end
-  local data = f:read("*a")
-  f:close()
-  local b64 = vim.base64.encode(data)
-  local CHUNK, n, i = 4096, #b64, 1
-  if n == 0 then
-    return false
-  end
-  local first = true
-  while i <= n do
-    local chunk = b64:sub(i, i + CHUNK - 1)
-    i = i + CHUNK
-    local more = (i <= n) and 1 or 0
-    if first then
-      emit(string.format("\27_Ga=t,f=100,t=d,i=%d,q=2,m=%d;%s\27\\", id, more, chunk))
-      first = false
-    else
-      emit(string.format("\27_Gm=%d;%s\27\\", more, chunk))
-    end
-  end
-  -- create the virtual placement that the placeholder cells reference
-  emit(string.format("\27_Ga=p,U=1,i=%d,p=1,c=%d,r=%d,q=2\27\\", id, cols, rows))
-  return true
-end
-
---- Delete image id `id` and its placements.
-local function kitty_delete(id)
-  emit("\27_Ga=d,d=i,i=" .. id .. ",q=2\27\\")
-end
 
 ----------------------------------------------------------------------
 -- geometry + paint
@@ -499,18 +408,7 @@ local function preview_available()
     return false, "not a kitty-graphics terminal (kitty/Ghostty/WezTerm)"
   end
   if vim.env.TMUX then
-    -- Must be "all", not "on": Neovim runs in the alternate screen, where tmux
-    -- only forwards graphics passthrough when allow-passthrough is "all".
-    local pt = vim.trim(vim.fn.system({ "tmux", "show", "-gv", "allow-passthrough" }))
-    if pt ~= "all" then
-      return false,
-        "tmux is intercepting the kitty graphics escapes. Enable FULL passthrough, then retry:\n"
-          .. "    tmux set -g allow-passthrough all\n"
-          .. "  To make it permanent, add to ~/.tmux.conf:\n"
-          .. "    set -g allow-passthrough all\n"
-          .. "  ('on' is not enough — Neovim's alternate screen needs 'all'.)"
-    end
-    return true
+    return gpu.tmux_passthrough_ok()
   end
   if term ~= "kitty" and term ~= "ghostty" and term ~= "wezterm" then
     return false, "no kitty graphics protocol on this terminal"
@@ -754,6 +652,19 @@ function M.install(cb)
     vim.notify("[mdrender] need Node.js (npx) to install chrome-headless-shell", vim.log.levels.ERROR)
     return cb(false)
   end
+  -- @puppeteer/browsers requires Node >= 18. On distros whose default node is
+  -- older (e.g. Ubuntu 20.04 apt nodejs is v10) the install fails with a cryptic
+  -- npx error; surface a clear hint instead.
+  local ver = vim.trim(vim.fn.system({ "node", "--version" })) -- e.g. "v20.9.0"
+  local major = tonumber(ver:match("^v(%d+)"))
+  if major and major < 18 then
+    vim.notify(
+      ("[mdrender] Node %s is too old — chrome-headless-shell needs Node >= 18.\n"):format(ver)
+        .. "  Upgrade Node (e.g. via nvm or your distro's nodesource package) and retry :MdRender install.",
+      vim.log.levels.ERROR
+    )
+    return cb(false)
+  end
   vim.fn.mkdir(INSTALL_PATH, "p")
   vim.notify("[mdrender] installing chrome-headless-shell (one-time download)…")
   vim.system(
@@ -776,6 +687,6 @@ M._build_html = build_html
 M._find_chrome = find_chrome
 M._render_png = render_png
 M._available = preview_available
-M._tmux_wrap = tmux_wrap
+M._tmux_wrap = term.tmux_wrap
 
 return M

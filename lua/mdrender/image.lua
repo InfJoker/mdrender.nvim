@@ -7,11 +7,13 @@
 --- injected as extmark `virt_lines` below the image's markdown link, so they
 --- scroll naturally with the buffer.
 ---
---- Requires a GPU terminal speaking the kitty protocol (kitty/ghostty/wezterm)
---- and is therefore disabled inside tmux. Non-PNG images are converted with
---- ImageMagick (`magick`/`convert`) when available.
+--- Requires a GPU terminal speaking the kitty protocol (kitty/ghostty/wezterm).
+--- Works inside tmux when allow-passthrough=all (the shared term module wraps the
+--- escapes). Non-PNG images are converted with ImageMagick (`magick`/`convert`)
+--- when available.
 local config = require("mdrender.config")
 local gpu = require("mdrender.gpu")
+local term = require("mdrender.term")
 
 local M = {}
 
@@ -92,27 +94,17 @@ local function ensure_png(path)
   return nil
 end
 
---- Write a raw byte string straight to the controlling terminal.
-local function term_write(data)
-  local f = io.open("/dev/tty", "w")
-  if f then
-    f:write(data)
-    f:close()
-  end
-end
-
 --- Transmit `path` as a virtual placement of size cols x rows. Returns the id.
+--- Delegates to the shared term module (direct `t=d` transport + tmux passthrough
+--- wrapping), the same path the graphical preview uses — so inline images work
+--- through tmux and there is only one terminal-output implementation to maintain.
 local function transmit(path, cols, rows)
   if transmitted[path] then
     return transmitted[path].id
   end
   local id = next_id
   next_id = next_id + 1
-  local b64 = vim.base64.encode(path)
-  -- a=T transmit+display, U=1 unicode placeholders, q=2 quiet, f=100 PNG, t=f file
-  local ctrl = string.format("a=T,U=1,i=%d,q=2,f=100,t=f,c=%d,r=%d", id, cols, rows)
-  -- payload may need chunking; paths are short so a single chunk is fine.
-  term_write("\27_G" .. ctrl .. ";" .. b64 .. "\27\\")
+  term.transmit_virtual(id, path, cols, rows)
   transmitted[path] = { id = id, cols = cols, rows = rows }
   return id
 end
@@ -202,7 +194,7 @@ function M.clear(buf)
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   end
   -- delete every transmitted image from the terminal
-  term_write("\27_Ga=d,q=2\27\\")
+  term.delete_all()
   transmitted = {}
 end
 
